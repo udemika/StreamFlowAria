@@ -151,9 +151,9 @@ sudo journalctl -u flustream -f
 http 8080;
 edit_auth admin admin;
 
-stream ROOK4K {
-  title "ROOK 4K";
-  input http://kinola.top:80/ROOK4K/video.m3u8;
+stream BOXPremiere4K {
+  title "BOX Premiere 4K";
+  input http://qx7.halturka.top:80/iGliukasV/video.m3u8;
   engine astrag;
   buffer_mode normal;
   source_timeout 30;
