@@ -101,6 +101,7 @@ from dataclasses import dataclass
 import ipaddress
 import math
 import os
+import re
 import socket
 import time
 from typing import Callable
@@ -1706,8 +1707,8 @@ class Engine:
         seen_segments = OrderedDict()
         prefetch_queue: asyncio.Queue = asyncio.Queue(maxsize=96)
         prefetch_bytes = 0
-        max_prefetch_bytes = 4 * 1024 * 1024  # 4 MB strict streaming chunk cap per stream
-        max_single_seg_bytes = 14 * 1024 * 1024
+        max_prefetch_bytes = 8 * 1024 * 1024  # 8 MB streaming chunk cap per stream
+        max_single_seg_bytes = 24 * 1024 * 1024
         producer_error = None
 
         master_url = playlist_url
@@ -1727,6 +1728,11 @@ class Engine:
                         return
                     try:
                         resp = await client.get(active_playlist_url)
+                        if resp.status_code in (401, 403) and first_load:
+                            fb_ua = self.stream_options.get("fallback_user_agent")
+                            if fb_ua and client.headers.get("User-Agent") != fb_ua:
+                                client.headers["User-Agent"] = fb_ua
+                                resp = await client.get(active_playlist_url)
                         if resp.status_code == 404 and active_playlist_url != master_url:
                             active_playlist_url = master_url
                             resp = await client.get(active_playlist_url)
@@ -1753,13 +1759,27 @@ class Engine:
                         continue
 
                     if any(line.startswith("#EXT-X-STREAM-INF") for line in lines):
+                        best_url = None
+                        best_bw = -1
                         for i, line in enumerate(lines):
-                            if line.startswith("#EXT-X-STREAM-INF") and i + 1 < len(lines):
-                                nxt = lines[i + 1]
-                                if not nxt.startswith("#"):
-                                    active_playlist_url = urljoin(resp_url, nxt)
-                                    break
-                        continue
+                            if line.startswith("#EXT-X-STREAM-INF"):
+                                bw = 0
+                                m_bw = re.search(r"BANDWIDTH=(\d+)", line)
+                                if m_bw:
+                                    bw = int(m_bw.group(1))
+                                j = i + 1
+                                while j < len(lines) and lines[j].startswith("#"):
+                                    j += 1
+                                if j < len(lines):
+                                    cand_url = urljoin(resp_url, lines[j])
+                                    if bw >= best_bw:
+                                        best_bw = bw
+                                        best_url = cand_url
+                        if best_url and best_url != active_playlist_url:
+                            active_playlist_url = best_url
+                            continue
+                        elif best_url:
+                            active_playlist_url = best_url
 
                     seg_entries = []
                     next_dur = None
@@ -1860,7 +1880,7 @@ class Engine:
                     pass
 
         producer_task = asyncio.create_task(_prefetch_producer())
-        bootstrap_remaining = 4 * 1024 * 1024  # Fast-fill initial 2 HLS segments from historical segment
+        bootstrap_remaining = 8 * 1024 * 1024  # Fast-fill initial 2 HLS segments from historical segment
         slice_bytes = 188 * 174  # 32,712 bytes when live .ts/UDP subscribers exist
         seg_clock = None
         try:
@@ -2416,6 +2436,10 @@ class _AsyncHttpClient:
             host_hdr = f"{host}:{port}" if ((scheme == "http" and port != 80) or (scheme == "https" and port != 443)) else host
 
             req_lines = [f"{method} {path_query} HTTP/1.1", f"Host: {host_hdr}"]
+            if parts.username is not None and not any(k.lower() == "authorization" for k in self.headers):
+                import base64 as _b64
+                raw_cred = f"{parts.username}:{parts.password or ''}".encode("utf-8")
+                req_lines.append(f"Authorization: Basic {_b64.b64encode(raw_cred).decode('ascii')}")
             for k, v in self.headers.items():
                 if k.lower() != "host":
                     req_lines.append(f"{k}: {v}")
@@ -2757,6 +2781,8 @@ class StreamWorker:
         self.proc: Optional[asyncio.subprocess.Process] = None
         self.astrag_engine: Optional[AstraGEngine] = None
         self.engine_error: bool = False
+        self._last_astrag_pkts: int = 0
+        self._last_astrag_pkt_ts: float = 0.0
         self.dash_proc: Optional[asyncio.subprocess.Process] = None
         self.last_dash_req: float = 0.0
         self.push_procs: Dict[str, asyncio.subprocess.Process] = {}
@@ -2788,6 +2814,7 @@ class StreamWorker:
             except asyncio.CancelledError:
                 pass
         self.status = "Disabled"
+        self.engine_error = False
 
     def touch_client(self):
         self.last_client_time = time.time()
@@ -2803,8 +2830,8 @@ class StreamWorker:
 
     def buffered_seconds(self) -> int:
         return self.cached_buffer_sec if self.status == "Online" else 0
-    async def _kill_ffmpeg(self):
 
+    async def _kill_ffmpeg(self):
         for p in list(self.push_procs.values()):
             if p.returncode is None:
                 try:
@@ -2831,6 +2858,8 @@ class StreamWorker:
         self.bitrate_in_kbps = 0.0
         self.cached_buffer_sec = 0
         self._kbps_samples.clear()
+        self._last_astrag_pkts = 0
+        self._last_astrag_pkt_ts = 0.0
 
     async def _resolve_best_variant_url(self, raw_url: str) -> str:
         input_url = normalize_input_url(raw_url)
@@ -3085,15 +3114,207 @@ class StreamWorker:
                     except Exception:
                         pass
 
+    def _sync_astrag_segments_to_ram(self):
+        eng = self.astrag_engine
+        if eng is None:
+            return
+        if not getattr(eng, "_segments", None) and len(getattr(eng, "_current", b"")) >= 188 * 128:
+            if (time.monotonic() - getattr(eng, "_created", time.monotonic())) >= 1.8:
+                try:
+                    eng._finish_segment()
+                except Exception:
+                    pass
+        segs_dict = getattr(eng, "_segments", {})
+        if not segs_dict:
+            return
+        self.ram_dir.mkdir(parents=True, exist_ok=True)
+        seg_items = list(segs_dict.items())
+        valid_names = set()
+        m3u8_lines = [
+            "#EXTM3U",
+            "#EXT-X-VERSION:3",
+            f"#EXT-X-TARGETDURATION:{max(1, int(getattr(eng, '_playlist_target', 4)))}",
+            f"#EXT-X-MEDIA-SEQUENCE:{seg_items[0][0]}",
+        ]
+        total_dur = 0.0
+        dvr_hours = int(self.cfg.get("dvr_hours", 0))
+        for seq, seg in seg_items:
+            fname = f"seg_{seq:06d}.ts"
+            valid_names.add(fname)
+            fpath = self.ram_dir / fname
+            seg_bytes = bytes(seg.data) if not isinstance(seg.data, bytes) else seg.data
+            if not fpath.exists() and seg_bytes:
+                tmp_p = self.ram_dir / f".{fname}.tmp"
+                try:
+                    tmp_p.write_bytes(seg_bytes)
+                    os.replace(tmp_p, fpath)
+                except Exception:
+                    pass
+                if not self.probed_once and fpath.exists():
+                    self.probed_once = True
+                    asyncio.create_task(self._probe_codecs(fpath))
+                if dvr_hours > 0 and fpath.exists():
+                    ts_int = int(time.time())
+                    day_str = time.strftime("%Y-%m-%d", time.gmtime(ts_int))
+                    target_dir = self.dvr_dir / day_str
+                    target_dir.mkdir(parents=True, exist_ok=True)
+                    target_file = target_dir / f"{ts_int}_{max(1, int(round(seg.duration)))}.ts"
+                    if not target_file.exists():
+                        try:
+                            shutil.copy2(fpath, target_file)
+                        except Exception:
+                            pass
+            if getattr(seg, "discontinuity", False):
+                m3u8_lines.append("#EXT-X-DISCONTINUITY")
+            dur = max(0.2, float(getattr(seg, "duration", 3.0)))
+            total_dur += dur
+            m3u8_lines.append(f"#EXTINF:{dur:.3f},")
+            m3u8_lines.append(fname)
+
+        m3u8_tmp = self.ram_dir / ".index.m3u8.tmp"
+        m3u8_final = self.ram_dir / "index.m3u8"
+        try:
+            m3u8_tmp.write_text("\n".join(m3u8_lines) + "\n", encoding="utf-8")
+            os.replace(m3u8_tmp, m3u8_final)
+        except Exception:
+            pass
+        try:
+            for entry in os.scandir(self.ram_dir):
+                if entry.name.startswith("seg_") and entry.name.endswith(".ts") and entry.name not in valid_names:
+                    try:
+                        os.unlink(entry.path)
+                    except OSError:
+                        pass
+        except OSError:
+            pass
+        self.cached_buffer_sec = min(self.target_buffer_seconds(), max(1, int(round(total_dur))))
+        elem_pids = getattr(eng, "_elementary_pids", {})
+        if elem_pids and (self.codec_info.startswith("Pass-through") or self.codec_info.startswith("ERR:")):
+            tracks = []
+            for tname in elem_pids.values():
+                if tname == "VIDEO":
+                    tracks.append("H264 1920x1080")
+                elif tname == "AUDIO":
+                    tracks.append("AAC")
+            if tracks:
+                self.codec_info = " / ".join(tracks)
+
     async def _lifecycle_loop(self):
+        default_chrome_ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
         while not self.stop_event.is_set():
             if not self.cfg.get("enabled", True) or not self.cfg.get("inputs"):
                 self.status = "Disabled"
+                self.engine_error = False
                 self.started_at = None
                 await self._kill_ffmpeg()
                 shutil.rmtree(self.ram_dir, ignore_errors=True)
-                await asyncio.sleep(1.5)
+                await asyncio.sleep(0.6)
                 continue
+
+            is_astrag = (self.cfg.get("engine") == "astrag")
+
+            if is_astrag:
+                if self.proc is not None:
+                    await self._kill_ffmpeg()
+
+                raw_inputs = [i.strip() for i in self.cfg.get("inputs", []) if i.strip()]
+                if not raw_inputs:
+                    self.status = "Error"
+                    self.engine_error = True
+                    self.bitrate_in_kbps = 0.0
+                    await asyncio.sleep(1.5)
+                    continue
+
+                if self.astrag_engine is None:
+                    norm_inputs = [normalize_input_url(u) for u in raw_inputs]
+                    self.active_input_idx = self.active_input_idx % len(norm_inputs)
+                    ordered_urls = norm_inputs[self.active_input_idx:] + norm_inputs[:self.active_input_idx]
+
+                    shutil.rmtree(self.ram_dir, ignore_errors=True)
+                    self.ram_dir.mkdir(parents=True, exist_ok=True)
+                    self.processed_segments.clear()
+                    self.probed_once = False
+
+                    cfg_ua = (self.cfg.get("user_agent") or "").strip()
+                    if not cfg_ua or cfg_ua == default_chrome_ua:
+                        primary_ua = "AstraG/2.0"
+                        fallback_ua = default_chrome_ua
+                    else:
+                        primary_ua = cfg_ua
+                        fallback_ua = "AstraG/2.0"
+
+                    max_segs = 3 if self.cfg.get("buffer_mode") == "normal" else 8
+                    try:
+                        self.astrag_engine = AstraGEngine(
+                            ordered_urls,
+                            segment_duration=3.0,
+                            max_segments=max_segs,
+                            max_segment_bytes=6 * 1024 * 1024,
+                            max_hls_bytes=24 * 1024 * 1024,
+                            stream_options={
+                                "user_agent": primary_ua,
+                                "fallback_user_agent": fallback_ua,
+                            },
+                        )
+                        await self.astrag_engine.start()
+                        self.started_at = time.time()
+                        self.last_segment_time = time.time()
+                        self._last_astrag_pkts = 0
+                        self._last_astrag_pkt_ts = time.time()
+                        if not self.engine_error and self.status != "Online":
+                            self.status = "Waiting"
+                    except Exception as e:
+                        self.codec_info = f"ERR: {str(e)[:55]}"
+                        self.status = "Error"
+                        self.engine_error = True
+                        self.bitrate_in_kbps = 0.0
+                        await self._kill_ffmpeg()
+                        self.active_input_idx = (self.active_input_idx + 1) % len(norm_inputs)
+                        await asyncio.sleep(2.5)
+                        continue
+
+                self._sync_astrag_segments_to_ram()
+                await self._spawn_pushes()
+
+                st = self.astrag_engine.stats() if self.astrag_engine else {}
+                pkts = int(st.get("packets", 0) or 0)
+                in_errs = int(st.get("input_errors", 0) or 0)
+                raw_bps = float(st.get("effective_bitrate") or st.get("pcr_bitrate") or st.get("bitrate") or 0.0)
+                now_ts = time.time()
+
+                if pkts > self._last_astrag_pkts:
+                    self._last_astrag_pkts = pkts
+                    self._last_astrag_pkt_ts = now_ts
+                    self.last_segment_time = now_ts
+                    if pkts >= 16 or len(getattr(self.astrag_engine, "_segments", {})) > 0:
+                        self.status = "Online"
+                        self.engine_error = False
+                        self.bitrate_in_kbps = max(1, int(round(raw_bps / 1000.0)))
+                        if self.codec_info.startswith("ERR:"):
+                            self.codec_info = "Pass-through (-c copy)"
+
+                cfg_to = max(8, int(self.cfg.get("source_timeout", 15)))
+                idle_pkt_sec = now_ts - (self._last_astrag_pkt_ts or now_ts)
+                failed_connect = (pkts < 16 and ((in_errs >= 1 and idle_pkt_sec >= 2.5) or idle_pkt_sec >= min(10, cfg_to)))
+                stalled_online = (pkts >= 16 and idle_pkt_sec > max(15, cfg_to))
+
+                if failed_connect or stalled_online:
+                    last_err = st.get("last_error") or "AstraG stream error"
+                    self.codec_info = f"ERR: {str(last_err)[:55]}"
+                    self.status = "Error"
+                    self.engine_error = True
+                    self.bitrate_in_kbps = 0.0
+                    await self._kill_ffmpeg()
+                    if raw_inputs:
+                        self.active_input_idx = (self.active_input_idx + 1) % len(raw_inputs)
+                    await asyncio.sleep(2.0)
+                    continue
+
+                await asyncio.sleep(0.5)
+                continue
+
+            if self.astrag_engine is not None:
+                await self._kill_ffmpeg()
 
             if self.cfg.get("mode") == "ondemand":
                 idle_sec = time.time() - self.last_client_time
@@ -3103,6 +3324,7 @@ class StreamWorker:
                         await self._kill_ffmpeg()
                         shutil.rmtree(self.ram_dir, ignore_errors=True)
                     self.status = "Waiting"
+                    self.engine_error = False
                     self.started_at = None
                     await asyncio.sleep(1.0)
                     continue
@@ -3116,6 +3338,7 @@ class StreamWorker:
                 except Exception:
                     pass
                 self.status = "Error"
+                self.engine_error = True
                 await self._kill_ffmpeg()
                 inputs = [i for i in self.cfg.get("inputs", []) if i.strip()]
                 if inputs:
@@ -3126,6 +3349,7 @@ class StreamWorker:
                 inputs = [i for i in self.cfg.get("inputs", []) if i.strip()]
                 if not inputs:
                     self.status = "Error"
+                    self.engine_error = True
                     await asyncio.sleep(3.0)
                     continue
                 self.active_input_idx = self.active_input_idx % len(inputs)
@@ -3147,24 +3371,26 @@ class StreamWorker:
                     )
                     self.started_at = time.time()
                     self.last_segment_time = time.time()
-                    if self.status != "Online":
+                    if self.status != "Online" and not self.engine_error:
                         self.status = "Waiting"
                 except Exception as e:
                     self.codec_info = f"ERR: {str(e)[:50]}"
                     self.status = "Error"
+                    self.engine_error = True
                     self.active_input_idx = (self.active_input_idx + 1) % len(inputs)
                     await asyncio.sleep(3.0)
                     continue
 
-
-
             await self._sync_ram_to_dvr()
+            if self.status == "Online":
+                self.engine_error = False
             await self._spawn_pushes()
 
             cfg_to = max(8, int(self.cfg.get("source_timeout", 15)))
             src_timeout = max(25, cfg_to) if self.status == "Online" else cfg_to
             if time.time() - self.last_segment_time > src_timeout:
                 self.status = "Error"
+                self.engine_error = True
                 await self._kill_ffmpeg()
                 inputs = [i for i in self.cfg.get("inputs", []) if i.strip()]
                 if inputs:
@@ -3172,7 +3398,7 @@ class StreamWorker:
                 await asyncio.sleep(2.0)
                 continue
 
-            await asyncio.sleep(1.2)
+            await asyncio.sleep(0.8)
 
 
 class StreamManager:
@@ -3269,16 +3495,22 @@ class StreamManager:
                 del self.workers[name]
         for name, scfg in new_map.items():
             if name in self.workers:
-                old_cfg = self.workers[name].cfg
-                self.workers[name].cfg = scfg
+                w = self.workers[name]
+                old_cfg = w.cfg
+                w.cfg = scfg
+                w.touch_client()
                 if (
                     old_cfg.get("inputs") != scfg.get("inputs")
                     or old_cfg.get("enabled") != scfg.get("enabled")
                     or old_cfg.get("mode") != scfg.get("mode")
                     or old_cfg.get("quality", "best") != scfg.get("quality", "best")
-                    or old_cfg.get("buffer_mode", "30s") != scfg.get("buffer_mode", "30s") or old_cfg.get("user_agent", "") != scfg.get("user_agent", "") or old_cfg.get("engine", "ffmpeg") != scfg.get("engine", "ffmpeg")
+                    or old_cfg.get("buffer_mode", "30s") != scfg.get("buffer_mode", "30s")
+                    or old_cfg.get("user_agent", "") != scfg.get("user_agent", "")
+                    or old_cfg.get("engine", "ffmpeg") != scfg.get("engine", "ffmpeg")
                 ):
-                    await self.workers[name]._kill_ffmpeg()
+                    w.engine_error = False
+                    w.status = "Waiting" if scfg.get("enabled", True) else "Disabled"
+                    await w._kill_ffmpeg()
             else:
                 w = StreamWorker(scfg, self)
                 self.workers[name] = w
@@ -3570,10 +3802,16 @@ async def ensure_ondemand_ready(w: StreamWorker) -> bool:
     m3u8 = w.ram_dir / "index.m3u8"
     for _ in range(45):
         if w.cfg.get("engine") == "astrag" and w.astrag_engine is not None:
+            w._sync_astrag_segments_to_ram()
             segs_dict = getattr(w.astrag_engine, "_segments", {})
-            if segs_dict:
-                w._sync_astrag_segments_to_ram(segs_dict)
-            if len(segs_dict) >= 1 or int(w.astrag_engine.stats().get("packets", 0)) > 64:
+            if len(segs_dict) >= 1 and m3u8.exists():
+                return True
+            if int(w.astrag_engine.stats().get("packets", 0)) >= 64 and len(getattr(w.astrag_engine, "_current", b"")) >= 188 * 32:
+                try:
+                    w.astrag_engine._finish_segment()
+                    w._sync_astrag_segments_to_ram()
+                except Exception:
+                    pass
                 if m3u8.exists():
                     return True
         if m3u8.exists():
@@ -3597,6 +3835,8 @@ async def handle_live_hls(req: web.Request) -> web.Response:
         raise web.HTTPForbidden(text="Session kicked")
 
     ready = await ensure_ondemand_ready(w)
+    if w.cfg.get("engine") == "astrag" and w.astrag_engine is not None:
+        w._sync_astrag_segments_to_ram()
     m3u8_file = w.ram_dir / "index.m3u8"
     if not ready or not m3u8_file.exists():
         raise web.HTTPServiceUnavailable(text=f"Stream buffering ({w.codec_info})")
@@ -3623,6 +3863,18 @@ async def handle_ram_media_chunk(req: web.Request) -> web.StreamResponse:
         raise web.HTTPNotFound()
     w.touch_client()
     seg_path = w.ram_dir / seg_name
+    if not seg_path.exists() and w.cfg.get("engine") == "astrag" and w.astrag_engine is not None:
+        m_seq = re.search(r"(\d+)\.ts$", seg_name)
+        if m_seq:
+            raw_seg = w.astrag_engine.get_segment(int(m_seq.group(1)))
+            if raw_seg is not None:
+                sess = MANAGER.register_session(name, req, "HLS", len(raw_seg))
+                if sess.kicked:
+                    raise web.HTTPForbidden()
+                return web.Response(
+                    body=raw_seg,
+                    headers={"Content-Type": "video/mp2t", "Access-Control-Allow-Origin": "*", "Cache-Control": "max-age=30"}
+                )
     try:
         file_size = seg_path.stat().st_size
     except FileNotFoundError:
@@ -3646,7 +3898,7 @@ async def handle_http_mpegts(req: web.Request) -> web.StreamResponse:
         raise web.HTTPForbidden(text="Auth failed")
 
     ready = await ensure_ondemand_ready(w)
-    if not ready:
+    if not ready and not (w.cfg.get("engine") == "astrag" and w.astrag_engine is not None):
         raise web.HTTPServiceUnavailable(text="Stream offline")
 
     resp = web.StreamResponse(
@@ -3666,7 +3918,13 @@ async def handle_http_mpegts(req: web.Request) -> web.StreamResponse:
         queue = eng.subscribe(4096)
         try:
             while not queue.empty():
-                queue.get_nowait()
+                stale = queue.get_nowait()
+                try:
+                    queue.task_done()
+                except ValueError:
+                    pass
+                if stale is None:
+                    break
             burst = eng.bootstrap_burst()
             if burst:
                 await resp.write(burst)
@@ -3674,11 +3932,19 @@ async def handle_http_mpegts(req: web.Request) -> web.StreamResponse:
             while not sess.kicked and w.cfg.get("enabled", True) and w.astrag_engine is eng:
                 w.touch_client()
                 pkt = await asyncio.wait_for(queue.get(), timeout=10.0)
+                try:
+                    queue.task_done()
+                except ValueError:
+                    pass
                 if pkt is None:
                     break
                 buf = bytearray(pkt)
                 while len(buf) + 188 <= 32712 and not queue.empty():
                     nxt = queue.get_nowait()
+                    try:
+                        queue.task_done()
+                    except ValueError:
+                        pass
                     if nxt is None:
                         break
                     buf.extend(nxt)
@@ -4183,15 +4449,26 @@ async def api_set_stream_engine(req: web.Request) -> web.Response:
     body = await req.json()
     target_name = body.get("name", "")
     eng = "astrag" if body.get("engine") == "astrag" else "ffmpeg"
+    new_inputs = body.get("inputs")
+    new_enabled = body.get("enabled")
     for s in MANAGER.config_data.get("streams", []):
         if s["name"] == target_name:
             s["engine"] = eng
+            if isinstance(new_inputs, list) and any(str(x).strip() for x in new_inputs):
+                s["inputs"] = [str(x).strip() for x in new_inputs if str(x).strip()]
+            if isinstance(new_enabled, bool):
+                s["enabled"] = new_enabled
+            elif eng == "astrag" and s.get("inputs"):
+                s["enabled"] = True
             w = MANAGER.workers.get(s["name"])
             if w:
-                w.cfg["engine"] = eng
+                w.cfg = s
+                w.engine_error = False
                 w.touch_client()
                 w.status = "Waiting" if s.get("enabled", True) else "Disabled"
                 await w._kill_ffmpeg()
+            else:
+                await MANAGER.apply_streams()
             break
     MANAGER.save_configs()
     return web.json_response({"ok": True, "engine": eng})
@@ -4232,6 +4509,8 @@ async def api_switch_input(req: web.Request) -> web.Response:
     w = MANAGER.workers.get(name)
     if w:
         w.active_input_idx = idx
+        w.engine_error = False
+        w.touch_client()
         w.status = "Waiting"
         await w._kill_ffmpeg()
     return web.json_response({"ok": True})
@@ -4249,6 +4528,7 @@ async def api_restart_stream(req: web.Request) -> web.Response:
     name = req.match_info["name"]
     w = MANAGER.workers.get(name)
     if w:
+        w.engine_error = False
         w.touch_client()
         w.status = "Waiting"
         await w._kill_ffmpeg()
@@ -6645,7 +6925,7 @@ function renderStreamsTable(fromPoll = false) {
 
     const upStr = (st === 'Online') ? fmtStreamUptime(s.runtime.uptime) : '';
     const engName = s.engine || (s.runtime && s.runtime.engine) || 'ffmpeg';
-    const isEngErr = (st === 'Error') || Boolean(s.runtime && s.runtime.engine_error) || (engName === 'astrag' && (s.runtime.bitrate_kbps || 0) === 0 && st !== 'Online');
+    const isEngErr = (st === 'Error') || Boolean(s.runtime && s.runtime.engine_error) || String((s.runtime && s.runtime.codecs) || '').startsWith('ERR:');
     const brStr = (st === 'Online' && s.runtime.bitrate_kbps > 0)
       ? `${(s.runtime.bitrate_kbps / 1000).toFixed(2)} ${t('mbps_unit')} (${s.runtime.bitrate_kbps} ${t('kbps_unit')})`
       : (isEngErr ? '<span style="color:#ef4444;font-weight:800;">Error</span>' : 'n/a');
@@ -6929,7 +7209,7 @@ function updateStreamPageLiveStats() {
   const isFhd = codecs.includes('1920') || codecs.includes('1080');
   const isHd = codecs.includes('1280') || codecs.includes('720');
   document.getElementById('sp_ov_res').textContent = !codecs ? 'SD' : (is4k ? '4K UHD' : (isFhd ? 'FHD' : (isHd ? 'HD' : 'SD')));
-  const isAstraErr = (st === 'Error') || Boolean(s.runtime && s.runtime.engine_error) || codecs.startsWith('ERR:') || (curEng === 'astrag' && (s.runtime.bitrate_kbps || 0) === 0 && st !== 'Online');
+  const isAstraErr = (st === 'Error') || Boolean(s.runtime && s.runtime.engine_error) || codecs.startsWith('ERR:');
   const brEl = document.getElementById('sp_ov_br');
   if (isAstraErr) {
     brEl.textContent = 'Error';
@@ -7026,16 +7306,26 @@ function toggleEoBtn(btn, mode) {
 
 async function onPlaybackEngineChange(engVal) {
   if (!EDITING_NAME) return;
+  const newUrlEl = document.getElementById('sp_new_url_inp');
+  if (newUrlEl && newUrlEl.value.trim()) {
+    EDIT_INPUTS_ARR.push(newUrlEl.value.trim());
+    newUrlEl.value = '';
+    renderInputsListRows();
+  }
+  const cleanInputs = EDIT_INPUTS_ARR.map(x => x.trim()).filter(Boolean);
+  const chkEn = document.getElementById('f_enabled');
+  if (engVal === 'astrag' && cleanInputs.length > 0 && chkEn && !chkEn.checked) {
+    chkEn.checked = true;
+  }
   const s = STATE.streams.find(x => x.name === EDITING_NAME);
   if (s) {
     s.engine = engVal;
+    if (cleanInputs.length > 0) s.inputs = [...cleanInputs];
+    if (chkEn) s.enabled = chkEn.checked;
     if (s.runtime) {
       s.runtime.engine = engVal;
-      if (engVal === 'astrag' && (s.runtime.bitrate_kbps || 0) === 0 && s.runtime.status !== 'Online') {
-        s.runtime.engine_error = true;
-      } else if (engVal === 'ffmpeg') {
-        s.runtime.engine_error = false;
-      }
+      s.runtime.engine_error = false;
+      if (s.enabled !== false) s.runtime.status = 'Waiting';
     }
     updateStreamPageLiveStats();
   }
@@ -7043,10 +7333,21 @@ async function onPlaybackEngineChange(engVal) {
     await fetch('/api/v3/streams/engine', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({ name: EDITING_NAME, engine: engVal })
+      body: JSON.stringify({
+        name: EDITING_NAME,
+        engine: engVal,
+        inputs: cleanInputs,
+        enabled: chkEn ? chkEn.checked : true
+      })
     });
     toast(engVal === 'astrag' ? 'Playback Engine: AstraG (exclusive)' : 'Playback Engine: FFmpeg (built-in)');
     await pollStatus();
+    setTimeout(async () => {
+      await pollStatus();
+      if (CURRENT_SECTION === 'stream_page' && CURRENT_SP_TAB === 'overview') {
+        playOverviewStream('hls');
+      }
+    }, 1500);
   } catch (e) {}
 }
 async function saveStreamModal() {
