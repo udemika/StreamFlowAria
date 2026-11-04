@@ -4966,8 +4966,8 @@ INDEX_HTML = r"""<!DOCTYPE html>
     font-size: 13px; font-weight: 600; display: inline-flex; align-items: center; gap: 5.8px;
   }
   .status-filter-pill {
-    height: 31.7px; padding: 0 11.5px; border-radius: 8.6px; font-size: 13px; font-weight: 600;
-    cursor: pointer; display: inline-flex; align-items: center; gap: 6.5px; user-select: none;
+    height: 28.8px; padding: 0 9.4px; border-radius: 5.8px; font-size: 10.1px; font-weight: 600;
+    cursor: pointer; display: inline-flex; align-items: center; gap: 5.8px; user-select: none;
   }
   .status-filter-pill.active { border-color: #6366f1 !important; box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.3); }
   .dot-ico { width: 7.9px; height: 7.9px; border-radius: 50%; display: inline-block; }
