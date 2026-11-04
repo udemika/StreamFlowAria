@@ -1366,42 +1366,42 @@ async def handle_embed_html(req: web.Request) -> web.Response:
     <style>html,body,video{{margin:0;width:100%;height:100%;background:#000;overflow:hidden;}}
   /* === AQUA REDESIGN OVERRIDES (THEME 2) === */
   body.theme-2 { background: linear-gradient(135deg, #d6ebfe 0%, #b4dcfc 100%); color: #0f172a; }
-  body.theme-2 .flu-sidebar { background: #133c7a; border-right: none; box-shadow: 4px 0 24px rgba(0,0,0,0.15); }
+  body.theme-2 .flu-sidebar { background: #133c7a; border-right: none; box-shadow: 2.9px 0 17.3px rgba(0,0,0,0.15); }
   body.theme-2 .flu-sidebar .sb-logo-title, body.theme-2 .flu-sidebar .sb-chev { color: #ffffff !important; }
   body.theme-2 .flu-sidebar .sb-item { color: #93c5fd; }
   body.theme-2 .flu-sidebar .sb-item:hover { background: rgba(255, 255, 255, 0.1); color: #ffffff; }
-  body.theme-2 .flu-sidebar .sb-item.active { background: #2563eb; color: #ffffff; box-shadow: 0 4px 14px rgba(0,0,0,0.25); }
+  body.theme-2 .flu-sidebar .sb-item.active { background: #2563eb; color: #ffffff; box-shadow: 0 2.9px 10.1px rgba(0,0,0,0.25); }
   body.theme-2 .flu-sidebar .sb-seg { background: rgba(0,0,0,0.25); border: none; }
   body.theme-2 .flu-sidebar .sb-seg-btn { color: #93c5fd; }
   body.theme-2 .flu-sidebar .sb-seg-btn.active { background: #3b82f6; color: #ffffff; box-shadow: none; }
   body.theme-2 .sb-divider { border-top: 1px solid rgba(255,255,255,0.1); }
   
-  body.theme-2 .filter-bar { background: rgba(255, 255, 255, 0.35); border: 1px solid rgba(255, 255, 255, 0.6); box-shadow: 0 4px 16px rgba(0,0,0,0.02); }
-  body.theme-2 .add-plus-btn { background: #133c7a; box-shadow: 0 4px 12px rgba(19,60,122,0.3); border-radius: 8px; }
-  body.theme-2 .status-filter-pill { background: #ffffff; border-radius: 8px; border: 1px solid #bae6fd; font-size: 14px; }
+  body.theme-2 .filter-bar { background: rgba(255, 255, 255, 0.35); border: 1px solid rgba(255, 255, 255, 0.6); box-shadow: 0 2.9px 11.5px rgba(0,0,0,0.02); }
+  body.theme-2 .add-plus-btn { background: #133c7a; box-shadow: 0 2.9px 8.6px rgba(19,60,122,0.3); border-radius: 5.8px; }
+  body.theme-2 .status-filter-pill { background: #ffffff; border-radius: 5.8px; border: 1px solid #bae6fd; font-size: 10.1px; }
   body.theme-2 .status-filter-pill.active { background: #133c7a; color: #ffffff; border-color: #133c7a; }
   body.theme-2 .status-filter-pill.active b { color: #ffffff !important; }
   
   body.theme-2 .table-glass-wrap { background: transparent; border: none; box-shadow: none; }
-  body.theme-2 .streams-table { border-collapse: separate; border-spacing: 0 10px; }
-  body.theme-2 .streams-table thead th { background: transparent; border: none; color: #1e3a8a; font-weight: 800; padding-bottom: 4px; }
-  body.theme-2 .streams-table tbody tr { background: #ffffff; box-shadow: 0 4px 12px rgba(0,0,0,0.03); transition: transform 0.1s ease; }
-  body.theme-2 .streams-table tbody tr:hover { transform: translateY(-2px); box-shadow: 0 6px 16px rgba(0,0,0,0.08); }
-  body.theme-2 .streams-table tbody td { border: none; padding: 18px 16px; }
-  body.theme-2 .streams-table tbody td:first-child { border-radius: 12px 0 0 12px; }
-  body.theme-2 .streams-table tbody td:last-child { border-radius: 0 12px 12px 0; }
+  body.theme-2 .streams-table { border-collapse: separate; border-spacing: 0 7.2px; }
+  body.theme-2 .streams-table thead th { background: transparent; border: none; color: #1e3a8a; font-weight: 800; padding-bottom: 2.9px; }
+  body.theme-2 .streams-table tbody tr { background: #ffffff; box-shadow: 0 2.9px 8.6px rgba(0,0,0,0.03); transition: transform 0.1s ease; }
+  body.theme-2 .streams-table tbody tr:hover { transform: translateY(-2px); box-shadow: 0 4.3px 11.5px rgba(0,0,0,0.08); }
+  body.theme-2 .streams-table tbody td { border: none; padding: 13px 11.5px; }
+  body.theme-2 .streams-table tbody td:first-child { border-radius: 8.6px 0 0 8.6px; }
+  body.theme-2 .streams-table tbody td:last-child { border-radius: 0 8.6px 8.6px 0; }
   
-  body.theme-2 .st-status-Online { background: #d1fae5; color: #065f46; display: inline-block; padding: 3px 12px; border-radius: 999px; border: 1px solid #a7f3d0; font-size: 13.5px; margin-top: 8px; }
-  body.theme-2 .st-status-Waiting { background: #fef3c7; color: #92400e; display: inline-block; padding: 3px 12px; border-radius: 999px; border: 1px solid #fde68a; font-size: 13.5px; margin-top: 8px; }
-  body.theme-2 .st-status-Disabled { background: #f1f5f9; color: #475569; display: inline-block; padding: 3px 12px; border-radius: 999px; border: 1px solid #e2e8f0; font-size: 13.5px; margin-top: 8px; }
-  body.theme-2 .st-status-Error { background: #fee2e2; color: #b91c1c; display: inline-block; padding: 3px 12px; border-radius: 999px; border: 1px solid #fecaca; font-size: 13.5px; margin-top: 8px; }
+  body.theme-2 .st-status-Online { background: #d1fae5; color: #065f46; display: inline-block; padding: 2.2px 8.6px; border-radius: 999px; border: 1px solid #a7f3d0; font-size: 9.7px; margin-top: 5.8px; }
+  body.theme-2 .st-status-Waiting { background: #fef3c7; color: #92400e; display: inline-block; padding: 2.2px 8.6px; border-radius: 999px; border: 1px solid #fde68a; font-size: 9.7px; margin-top: 5.8px; }
+  body.theme-2 .st-status-Disabled { background: #f1f5f9; color: #475569; display: inline-block; padding: 2.2px 8.6px; border-radius: 999px; border: 1px solid #e2e8f0; font-size: 9.7px; margin-top: 5.8px; }
+  body.theme-2 .st-status-Error { background: #fee2e2; color: #b91c1c; display: inline-block; padding: 2.2px 8.6px; border-radius: 999px; border: 1px solid #fecaca; font-size: 9.7px; margin-top: 5.8px; }
   
-  body.theme-2 .sq-btn { border-radius: 50%; background: #e0f2fe; color: #0284c7; border: 1px solid #bae6fd; width: 38px; height: 38px; }
+  body.theme-2 .sq-btn { border-radius: 50%; background: #e0f2fe; color: #0284c7; border: 1px solid #bae6fd; width: 27.4px; height: 27.4px; }
   body.theme-2 .sq-btn:hover { background: #bae6fd; }
-  body.theme-2 .buf-toggle-group { background: #e0f2fe; border: 1px solid #bae6fd; border-radius: 8px; }
+  body.theme-2 .buf-toggle-group { background: #e0f2fe; border: 1px solid #bae6fd; border-radius: 5.8px; }
   body.theme-2 .buf-mode-btn.active { background: #133c7a; color: #ffffff !important; box-shadow: none; }
   
-  body.theme-2 .top-header .status-capsule { background: transparent; border: none; box-shadow: none; font-size: 14px; color: #1e3a8a; }
+  body.theme-2 .top-header .status-capsule { background: transparent; border: none; box-shadow: none; font-size: 10.1px; color: #1e3a8a; }
   body.theme-2 .top-header .status-capsule b { color: #2563eb; }
   body.theme-2 .search-wrap input { background: #ffffff; border: 1px solid #bae6fd; }
 </style>
@@ -1787,7 +1787,7 @@ LOGIN_HTML = r"""<!DOCTYPE html>
   }
   @keyframes floatSlow {
     0%, 100% { transform: translateY(0px) scale(1); }
-    50% { transform: translateY(-14px) scale(1.03); }
+    50% { transform: translateY(-12.9px) scale(1.03); }
   }
   @keyframes spinStar {
     0% { transform: rotate(0deg) scale(1); }
@@ -1799,14 +1799,14 @@ LOGIN_HTML = r"""<!DOCTYPE html>
     color: #0f172a;
   }
   body.theme-2 .bg-watermark {
-    position: fixed; right: 6vw; bottom: -6vh; font-size: 504.0px; font-weight: 800;
+    position: fixed; right: 6vw; bottom: -6vh; font-size: 362.9px; font-weight: 800;
     color: rgba(255, 255, 255, 0.45); line-height: 0.85; pointer-events: none; user-select: none;
     text-shadow: none; animation: floatSlow 9s ease-in-out infinite;
   }
   body.theme-2 .login-card {
-    background: rgba(255, 255, 255, 0.78); backdrop-filter: blur(26px);
+    background: rgba(255, 255, 255, 0.78); backdrop-filter: blur(18.7px);
     border: 1.5px solid rgba(255, 255, 255, 0.95);
-    box-shadow: 0 28px 70px rgba(15, 23, 42, 0.12);
+    box-shadow: 0 20.2px 50.4px rgba(15, 23, 42, 0.12);
   }
   body.theme-2 .brand-sub { color: #475569; }
   body.theme-2 .form-row label { color: #334155; }
@@ -1820,14 +1820,14 @@ LOGIN_HTML = r"""<!DOCTYPE html>
     color: #f8fafc;
   }
   body.theme-4 .bg-watermark {
-    position: fixed; right: 6vw; bottom: -6vh; font-size: 504.0px; font-weight: 800;
+    position: fixed; right: 6vw; bottom: -6vh; font-size: 362.9px; font-weight: 800;
     color: rgba(99, 102, 241, 0.08); line-height: 0.85; pointer-events: none; user-select: none;
     animation: floatSlow 9s ease-in-out infinite;
   }
   body.theme-4 .login-card {
-    background: rgba(15, 23, 42, 0.78); backdrop-filter: blur(26px);
+    background: rgba(15, 23, 42, 0.78); backdrop-filter: blur(18.7px);
     border: 1.5px solid rgba(99, 102, 241, 0.38);
-    box-shadow: 0 30px 80px rgba(0, 0, 0, 0.65);
+    box-shadow: 0 21.6px 57.6px rgba(0, 0, 0, 0.65);
   }
   body.theme-4 .brand-title { color: #ffffff; }
   body.theme-4 .brand-sub { color: #94a3b8; }
@@ -1838,85 +1838,85 @@ LOGIN_HTML = r"""<!DOCTYPE html>
   body.theme-4 .ctrl-pill { color: #e2e8f0; }
 
   .top-controls {
-    position: fixed; top: 24px; right: 28px; z-index: 20;
-    display: flex; align-items: center; gap: 8px; padding: 7px 12px; border-radius: 999px;
+    position: fixed; top: 17.3px; right: 20.2px; z-index: 20;
+    display: flex; align-items: center; gap: 5.8px; padding: 5px 8.6px; border-radius: 999px;
   }
   .ctrl-pill {
-    border: none; background: transparent; padding: 7px 14px; border-radius: 999px;
-    font-size: 16.2px; font-weight: 700; cursor: pointer;
+    border: none; background: transparent; padding: 5px 10.1px; border-radius: 999px;
+    font-size: 11.7px; font-weight: 700; cursor: pointer;
   }
   .ctrl-pill.active { background: linear-gradient(90deg, #3b82f6, #6366f1, #8b5cf6); color: #fff !important; }
-  .login-card { width: 680px; max-width: 95vw; border-radius: 32px; padding: 60px 56px; position: relative; z-index: 10; }
-  .brand-header { display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; gap: 18px; margin-bottom: 36px; width: 100%; }
-  .gemini-star { width: 125px; height: 125px; flex-shrink: 0; display: block; margin: 0 auto; }
-  .brand-title { font-size: 45.6px; font-weight: 800; letter-spacing: -0.03em; text-align: center; width: 100%; }
+  .login-card { width: 489.6px; max-width: 95vw; border-radius: 23px; padding: 43.2px 40.3px; position: relative; z-index: 10; }
+  .brand-header { display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; gap: 13px; margin-bottom: 25.9px; width: 100%; }
+  .gemini-star { width: 90px; height: 90px; flex-shrink: 0; display: block; margin: 0 auto; }
+  .brand-title { font-size: 32.8px; font-weight: 800; letter-spacing: -0.03em; text-align: center; width: 100%; }
   .brand-title span {
     background: linear-gradient(90deg, #3b82f6 0%, #6366f1 50%, #8b5cf6 100%);
     -webkit-background-clip: text; -webkit-text-fill-color: transparent;
   }
-  .brand-sub { font-size: 17.4px; font-weight: 500; margin-top: 4px; }
-  .form-row { margin-bottom: 22px; }
-  .form-row label { display: block; font-size: 16.8px; font-weight: 700; margin-bottom: 8px; }
-  .form-input { width: 100%; height: 62px; padding: 0 20px; border-radius: 16px; font-size: 21.6px; outline: none; }
-  .login-btn { width: 100%; height: 64px; border: none; border-radius: 16px; color: #fff; font-size: 22.8px; font-weight: 700; cursor: pointer; margin-top: 12px; }
+  .brand-sub { font-size: 12.5px; font-weight: 500; margin-top: 2.9px; }
+  .form-row { margin-bottom: 15.8px; }
+  .form-row label { display: block; font-size: 12.1px; font-weight: 700; margin-bottom: 5.8px; }
+  .form-input { width: 100%; height: 44.6px; padding: 0 14.4px; border-radius: 11.5px; font-size: 15.6px; outline: none; }
+  .login-btn { width: 100%; height: 46.1px; border: none; border-radius: 11.5px; color: #fff; font-size: 16.4px; font-weight: 700; cursor: pointer; margin-top: 8.6px; }
   .err {
     background: rgba(239, 68, 68, 0.14); border: 1px solid rgba(239, 68, 68, 0.4);
-    color: #ef4444; padding: 12px 16px; border-radius: 12px; font-size: 17.4px; font-weight: 600; margin-bottom: 20px; display: none;
+    color: #ef4444; padding: 8.6px 11.5px; border-radius: 8.6px; font-size: 12.5px; font-weight: 600; margin-bottom: 14.4px; display: none;
   }
 
   * { text-shadow: none !important; }
   .copy-ico-btn {
     background: linear-gradient(135deg, #2563eb, #4f46e5) !important;
     color: #ffffff !important; opacity: 1 !important;
-    height: 36px !important; padding: 0 16px !important;
-    border-radius: 8px !important; font-size: 16.8px !important;
+    height: 25.9px !important; padding: 0 11.5px !important;
+    border-radius: 5.8px !important; font-size: 12.1px !important;
     font-weight: 700 !important; display: inline-flex !important;
     align-items: center !important; justify-content: center !important;
-    gap: 6px !important; width: auto !important;
+    gap: 4.3px !important; width: auto !important;
   }
   .out-proto-box {
-    grid-template-columns: 108px 1fr auto !important;
+    grid-template-columns: 77.8px 1fr auto !important;
   }
 
 
   /* === AQUA REDESIGN OVERRIDES (THEME 2) === */
   body.theme-2 { background: linear-gradient(135deg, #d6ebfe 0%, #b4dcfc 100%); color: #0f172a; }
-  body.theme-2 .flu-sidebar { background: #133c7a; border-right: none; box-shadow: 4px 0 24px rgba(0,0,0,0.15); }
+  body.theme-2 .flu-sidebar { background: #133c7a; border-right: none; box-shadow: 2.9px 0 17.3px rgba(0,0,0,0.15); }
   body.theme-2 .flu-sidebar .sb-logo-title, body.theme-2 .flu-sidebar .sb-chev { color: #ffffff !important; }
   body.theme-2 .flu-sidebar .sb-item { color: #93c5fd; }
   body.theme-2 .flu-sidebar .sb-item:hover { background: rgba(255, 255, 255, 0.1); color: #ffffff; }
-  body.theme-2 .flu-sidebar .sb-item.active { background: #2563eb; color: #ffffff; box-shadow: 0 4px 14px rgba(0,0,0,0.25); }
+  body.theme-2 .flu-sidebar .sb-item.active { background: #2563eb; color: #ffffff; box-shadow: 0 2.9px 10.1px rgba(0,0,0,0.25); }
   body.theme-2 .flu-sidebar .sb-seg { background: rgba(0,0,0,0.25); border: none; }
   body.theme-2 .flu-sidebar .sb-seg-btn { color: #93c5fd; }
   body.theme-2 .flu-sidebar .sb-seg-btn.active { background: #3b82f6; color: #ffffff; box-shadow: none; }
   body.theme-2 .sb-divider { border-top: 1px solid rgba(255,255,255,0.1); }
   
-  body.theme-2 .filter-bar { background: rgba(255, 255, 255, 0.35); border: 1px solid rgba(255, 255, 255, 0.6); box-shadow: 0 4px 16px rgba(0,0,0,0.02); }
-  body.theme-2 .add-plus-btn { background: #133c7a; box-shadow: 0 4px 12px rgba(19,60,122,0.3); border-radius: 8px; }
-  body.theme-2 .status-filter-pill { background: #ffffff; border-radius: 8px; border: 1px solid #bae6fd; font-size: 14px; }
+  body.theme-2 .filter-bar { background: rgba(255, 255, 255, 0.35); border: 1px solid rgba(255, 255, 255, 0.6); box-shadow: 0 2.9px 11.5px rgba(0,0,0,0.02); }
+  body.theme-2 .add-plus-btn { background: #133c7a; box-shadow: 0 2.9px 8.6px rgba(19,60,122,0.3); border-radius: 5.8px; }
+  body.theme-2 .status-filter-pill { background: #ffffff; border-radius: 5.8px; border: 1px solid #bae6fd; font-size: 10.1px; }
   body.theme-2 .status-filter-pill.active { background: #133c7a; color: #ffffff; border-color: #133c7a; }
   body.theme-2 .status-filter-pill.active b { color: #ffffff !important; }
   
   body.theme-2 .table-glass-wrap { background: transparent; border: none; box-shadow: none; }
-  body.theme-2 .streams-table { border-collapse: separate; border-spacing: 0 10px; }
-  body.theme-2 .streams-table thead th { background: transparent; border: none; color: #1e3a8a; font-weight: 800; padding-bottom: 4px; }
-  body.theme-2 .streams-table tbody tr { background: #ffffff; box-shadow: 0 4px 12px rgba(0,0,0,0.03); transition: transform 0.1s ease; }
-  body.theme-2 .streams-table tbody tr:hover { transform: translateY(-2px); box-shadow: 0 6px 16px rgba(0,0,0,0.08); }
-  body.theme-2 .streams-table tbody td { border: none; padding: 18px 16px; }
-  body.theme-2 .streams-table tbody td:first-child { border-radius: 12px 0 0 12px; }
-  body.theme-2 .streams-table tbody td:last-child { border-radius: 0 12px 12px 0; }
+  body.theme-2 .streams-table { border-collapse: separate; border-spacing: 0 7.2px; }
+  body.theme-2 .streams-table thead th { background: transparent; border: none; color: #1e3a8a; font-weight: 800; padding-bottom: 2.9px; }
+  body.theme-2 .streams-table tbody tr { background: #ffffff; box-shadow: 0 2.9px 8.6px rgba(0,0,0,0.03); transition: transform 0.1s ease; }
+  body.theme-2 .streams-table tbody tr:hover { transform: translateY(-2px); box-shadow: 0 4.3px 11.5px rgba(0,0,0,0.08); }
+  body.theme-2 .streams-table tbody td { border: none; padding: 13px 11.5px; }
+  body.theme-2 .streams-table tbody td:first-child { border-radius: 8.6px 0 0 8.6px; }
+  body.theme-2 .streams-table tbody td:last-child { border-radius: 0 8.6px 8.6px 0; }
   
-  body.theme-2 .st-status-Online { background: #d1fae5; color: #065f46; display: inline-block; padding: 3px 12px; border-radius: 999px; border: 1px solid #a7f3d0; font-size: 13.5px; margin-top: 8px; }
-  body.theme-2 .st-status-Waiting { background: #fef3c7; color: #92400e; display: inline-block; padding: 3px 12px; border-radius: 999px; border: 1px solid #fde68a; font-size: 13.5px; margin-top: 8px; }
-  body.theme-2 .st-status-Disabled { background: #f1f5f9; color: #475569; display: inline-block; padding: 3px 12px; border-radius: 999px; border: 1px solid #e2e8f0; font-size: 13.5px; margin-top: 8px; }
-  body.theme-2 .st-status-Error { background: #fee2e2; color: #b91c1c; display: inline-block; padding: 3px 12px; border-radius: 999px; border: 1px solid #fecaca; font-size: 13.5px; margin-top: 8px; }
+  body.theme-2 .st-status-Online { background: #d1fae5; color: #065f46; display: inline-block; padding: 2.2px 8.6px; border-radius: 999px; border: 1px solid #a7f3d0; font-size: 9.7px; margin-top: 5.8px; }
+  body.theme-2 .st-status-Waiting { background: #fef3c7; color: #92400e; display: inline-block; padding: 2.2px 8.6px; border-radius: 999px; border: 1px solid #fde68a; font-size: 9.7px; margin-top: 5.8px; }
+  body.theme-2 .st-status-Disabled { background: #f1f5f9; color: #475569; display: inline-block; padding: 2.2px 8.6px; border-radius: 999px; border: 1px solid #e2e8f0; font-size: 9.7px; margin-top: 5.8px; }
+  body.theme-2 .st-status-Error { background: #fee2e2; color: #b91c1c; display: inline-block; padding: 2.2px 8.6px; border-radius: 999px; border: 1px solid #fecaca; font-size: 9.7px; margin-top: 5.8px; }
   
-  body.theme-2 .sq-btn { border-radius: 50%; background: #e0f2fe; color: #0284c7; border: 1px solid #bae6fd; width: 38px; height: 38px; }
+  body.theme-2 .sq-btn { border-radius: 50%; background: #e0f2fe; color: #0284c7; border: 1px solid #bae6fd; width: 27.4px; height: 27.4px; }
   body.theme-2 .sq-btn:hover { background: #bae6fd; }
-  body.theme-2 .buf-toggle-group { background: #e0f2fe; border: 1px solid #bae6fd; border-radius: 8px; }
+  body.theme-2 .buf-toggle-group { background: #e0f2fe; border: 1px solid #bae6fd; border-radius: 5.8px; }
   body.theme-2 .buf-mode-btn.active { background: #133c7a; color: #ffffff !important; box-shadow: none; }
   
-  body.theme-2 .top-header .status-capsule { background: transparent; border: none; box-shadow: none; font-size: 14px; color: #1e3a8a; }
+  body.theme-2 .top-header .status-capsule { background: transparent; border: none; box-shadow: none; font-size: 10.1px; color: #1e3a8a; }
   body.theme-2 .top-header .status-capsule b { color: #2563eb; }
   body.theme-2 .search-wrap input { background: #ffffff; border: 1px solid #bae6fd; }
 </style>
@@ -2045,7 +2045,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
   }
   html, body {
     display: flex; height: 100vh; width: 100vw; overflow: hidden;
-    font-size: 19.8px; transition: background 0.25s ease, color 0.2s ease;
+    font-size: 14.3px; transition: background 0.25s ease, color 0.2s ease;
   }
   @keyframes pulseGlow {
     0%, 100% { transform: scale(1); opacity: 1; }
@@ -2066,18 +2066,18 @@ INDEX_HTML = r"""<!DOCTYPE html>
     color: #0f172a;
   }
   body.theme-2 .bg-number-4 {
-    position: fixed; right: 35px; bottom: -30px; font-size: 384.0px; font-weight: 800;
+    position: fixed; right: 25.2px; bottom: -30px; font-size: 276.5px; font-weight: 800;
     color: rgba(255, 255, 255, 0.42); pointer-events: none; z-index: 0; line-height: 0.9;
     text-shadow: none; animation: floatWatermark 10s ease-in-out infinite;
   }
   body.theme-2 .flu-sidebar {
     background: rgba(255, 255, 255, 0.84);
-    backdrop-filter: blur(26px); -webkit-backdrop-filter: blur(26px);
+    backdrop-filter: blur(18.7px); -webkit-backdrop-filter: blur(18.7px);
     border-right: 1.5px solid rgba(255, 255, 255, 0.96);
     color: #0f172a;
-    box-shadow: 6px 0 28px rgba(15, 23, 42, 0.08);
+    box-shadow: 4.3px 0 20.2px rgba(15, 23, 42, 0.08);
   }
-  body.theme-2 .flu-sidebar:hover { box-shadow: 14px 0 44px rgba(15, 23, 42, 0.15); }
+  body.theme-2 .flu-sidebar:hover { box-shadow: 10.1px 0 31.7px rgba(15, 23, 42, 0.15); }
   body.theme-2 .sb-logo-title { color: #0f172a; font-weight: 700; }
   body.theme-2 .sb-chev { color: #475569; }
   body.theme-2 .sb-item { color: #1e293b; }
@@ -2085,14 +2085,14 @@ INDEX_HTML = r"""<!DOCTYPE html>
   body.theme-2 .sb-item.active {
     background: linear-gradient(135deg, #2563eb 0%, #4f46e5 100%);
     color: #ffffff;
-    box-shadow: 0 6px 18px rgba(37, 99, 235, 0.32);
+    box-shadow: 0 4.3px 13px rgba(37, 99, 235, 0.32);
   }
   body.theme-2 .sb-divider { border-top: 1px solid rgba(148, 163, 184, 0.3); }
   body.theme-2 .sb-seg { background: rgba(226, 232, 240, 0.75); border: 1px solid rgba(203, 213, 225, 0.9); }
   body.theme-2 .sb-seg-btn { color: #334155; }
   body.theme-2 .sb-seg-btn.active {
     background: linear-gradient(135deg, #2563eb, #4f46e5); color: #ffffff;
-    box-shadow: 0 2px 8px rgba(37, 99, 235, 0.3);
+    box-shadow: 0 2px 5.8px rgba(37, 99, 235, 0.3);
   }
   body.theme-2 .status-capsule,
   body.theme-2 .filter-bar,
@@ -2100,16 +2100,16 @@ INDEX_HTML = r"""<!DOCTYPE html>
   body.theme-2 .glass-panel,
   body.theme-2 .sp-card,
   body.theme-2 .sp-footer-bar {
-    background: rgba(255, 255, 255, 0.84); backdrop-filter: blur(22px);
+    background: rgba(255, 255, 255, 0.84); backdrop-filter: blur(15.8px);
     border: 1.5px solid rgba(255, 255, 255, 0.96);
-    box-shadow: 0 12px 34px rgba(15, 23, 42, 0.06);
+    box-shadow: 0 8.6px 24.5px rgba(15, 23, 42, 0.06);
   }
   body.theme-2 .sp-folder-tab {
     background: rgba(255, 255, 255, 0.52); color: #334155; border: 1px solid rgba(255, 255, 255, 0.85);
   }
   body.theme-2 .sp-folder-tab.active {
     background: #ffffff; color: #0f172a; border-bottom-color: #ffffff; font-weight: 800;
-    box-shadow: 0 -4px 14px rgba(15, 23, 42, 0.05);
+    box-shadow: 0 -4px 10.1px rgba(15, 23, 42, 0.05);
   }
   body.theme-2 .streams-table thead th {
     background: rgba(224, 242, 254, 0.96); color: #0f172a; border-bottom: 1.5px solid #cbd5e1;
@@ -2121,7 +2121,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
     background: rgba(255, 255, 255, 0.92); border: 1px solid #cbd5e1; color: #0f172a;
   }
   body.theme-2 .modal-card {
-    background: rgba(255, 255, 255, 0.96); backdrop-filter: blur(24px); color: #0f172a;
+    background: rgba(255, 255, 255, 0.96); backdrop-filter: blur(17.3px); color: #0f172a;
     border: 1.5px solid #ffffff;
   }
   body.theme-2 .form-input, body.theme-2 .out-proto-box {
@@ -2137,18 +2137,18 @@ INDEX_HTML = r"""<!DOCTYPE html>
     color: #f8fafc;
   }
   body.theme-4 .bg-number-4 {
-    position: fixed; right: 35px; bottom: -30px; font-size: 384.0px; font-weight: 800;
+    position: fixed; right: 25.2px; bottom: -30px; font-size: 276.5px; font-weight: 800;
     color: rgba(99, 102, 241, 0.07); pointer-events: none; z-index: 0; line-height: 0.9;
     text-shadow: none; animation: floatWatermark 10s ease-in-out infinite;
   }
   body.theme-4 .flu-sidebar {
     background: rgba(12, 18, 34, 0.88);
-    backdrop-filter: blur(26px); -webkit-backdrop-filter: blur(26px);
+    backdrop-filter: blur(18.7px); -webkit-backdrop-filter: blur(18.7px);
     border-right: 1px solid rgba(99, 102, 241, 0.32);
     color: #f8fafc;
-    box-shadow: 6px 0 30px rgba(0, 0, 0, 0.5);
+    box-shadow: 4.3px 0 21.6px rgba(0, 0, 0, 0.5);
   }
-  body.theme-4 .flu-sidebar:hover { box-shadow: 16px 0 50px rgba(0, 0, 0, 0.75); }
+  body.theme-4 .flu-sidebar:hover { box-shadow: 11.5px 0 36px rgba(0, 0, 0, 0.75); }
   body.theme-4 .sb-logo-title { color: #ffffff; font-weight: 700; }
   body.theme-4 .sb-chev { color: #94a3b8; }
   body.theme-4 .sb-item { color: #cbd5e1; }
@@ -2156,14 +2156,14 @@ INDEX_HTML = r"""<!DOCTYPE html>
   body.theme-4 .sb-item.active {
     background: linear-gradient(135deg, #3b82f6 0%, #6366f1 55%, #8b5cf6 100%);
     color: #ffffff;
-    box-shadow: 0 6px 20px rgba(99, 102, 241, 0.45);
+    box-shadow: 0 4.3px 14.4px rgba(99, 102, 241, 0.45);
   }
   body.theme-4 .sb-divider { border-top: 1px solid rgba(99, 102, 241, 0.24); }
   body.theme-4 .sb-seg { background: rgba(9, 13, 24, 0.78); border: 1px solid rgba(99, 102, 241, 0.32); }
   body.theme-4 .sb-seg-btn { color: #94a3b8; }
   body.theme-4 .sb-seg-btn.active {
     background: linear-gradient(135deg, #3b82f6, #6366f1); color: #ffffff;
-    box-shadow: 0 2px 10px rgba(99, 102, 241, 0.45);
+    box-shadow: 0 2px 7.2px rgba(99, 102, 241, 0.45);
   }
   body.theme-4 .status-capsule,
   body.theme-4 .filter-bar,
@@ -2171,9 +2171,9 @@ INDEX_HTML = r"""<!DOCTYPE html>
   body.theme-4 .glass-panel,
   body.theme-4 .sp-card,
   body.theme-4 .sp-footer-bar {
-    background: rgba(15, 23, 42, 0.84); backdrop-filter: blur(22px);
+    background: rgba(15, 23, 42, 0.84); backdrop-filter: blur(15.8px);
     border: 1px solid rgba(99, 102, 241, 0.35);
-    box-shadow: 0 14px 40px rgba(0, 0, 0, 0.45);
+    box-shadow: 0 10.1px 28.8px rgba(0, 0, 0, 0.45);
   }
   body.theme-4 .sp-folder-tab {
     background: rgba(15, 23, 42, 0.55); color: #94a3b8; border: 1px solid rgba(99, 102, 241, 0.25);
@@ -2198,7 +2198,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
   body.theme-4 .more-box { background: #0f172a; border-color: #4f46e5; }
   body.theme-4 .more-row code { color: #93c5fd; }
   body.theme-4 .modal-card {
-    background: rgba(15, 23, 42, 0.96); backdrop-filter: blur(26px); color: #f8fafc;
+    background: rgba(15, 23, 42, 0.96); backdrop-filter: blur(18.7px); color: #f8fafc;
     border: 1.5px solid rgba(99, 102, 241, 0.45);
   }
   body.theme-4 .form-input, body.theme-4 .out-proto-box {
@@ -2210,31 +2210,31 @@ INDEX_HTML = r"""<!DOCTYPE html>
 
   /* ==================== БОКОВАЯ ПАНЕЛЬ ==================== */
   .flu-sidebar {
-    width: 74px; height: 100vh; display: flex; flex-direction: column; justify-content: space-between;
-    padding: 16px 0; flex-shrink: 0; user-select: none; z-index: 300; overflow: hidden;
+    width: 53.3px; height: 100vh; display: flex; flex-direction: column; justify-content: space-between;
+    padding: 11.5px 0; flex-shrink: 0; user-select: none; z-index: 300; overflow: hidden;
     transition: width 0.13s cubic-bezier(0.2, 0, 0, 1), box-shadow 0.13s ease, background 0.25s ease;
   }
-  .flu-sidebar:hover { width: 355px; }
+  .flu-sidebar:hover { width: 255.6px; }
   .sb-brand {
-    height: 50px; display: flex; align-items: center; justify-content: space-between;
-    padding: 0 21px; margin-bottom: 10px; white-space: nowrap;
+    height: 36px; display: flex; align-items: center; justify-content: space-between;
+    padding: 0 15.1px; margin-bottom: 7.2px; white-space: nowrap;
   }
-  .sb-brand-left { display: flex; align-items: center; gap: 16px; }
-  .sb-star { width: 32px; height: 32px; flex-shrink: 0;  }
-  .sb-logo-title { font-size: 26.4px; letter-spacing: -0.02em; opacity: 0; transition: opacity 0.1s ease; }
+  .sb-brand-left { display: flex; align-items: center; gap: 11.5px; }
+  .sb-star { width: 23px; height: 23px; flex-shrink: 0;  }
+  .sb-logo-title { font-size: 19px; letter-spacing: -0.02em; opacity: 0; transition: opacity 0.1s ease; }
   .sb-logo-title span {
     background: linear-gradient(90deg, #3b82f6, #6366f1, #8b5cf6);
     -webkit-background-clip: text; -webkit-text-fill-color: transparent;
   }
-  .sb-chev { font-size: 26.4px; opacity: 0; transition: opacity 0.1s ease; }
+  .sb-chev { font-size: 19px; opacity: 0; transition: opacity 0.1s ease; }
   .flu-sidebar:hover .sb-logo-title, .flu-sidebar:hover .sb-chev { opacity: 1; }
-  .sb-nav { display: flex; flex-direction: column; gap: 14px; padding: 0 11px; flex: 1; }
+  .sb-nav { display: flex; flex-direction: column; gap: 10.1px; padding: 0 7.9px; flex: 1; }
   .sb-item {
-    height: 58px; border-radius: 14px; display: flex; align-items: center; gap: 16px;
-    padding: 0 14px; cursor: pointer; white-space: nowrap; transition: background 0.12s ease, color 0.12s ease;
+    height: 41.8px; border-radius: 10.1px; display: flex; align-items: center; gap: 11.5px;
+    padding: 0 10.1px; cursor: pointer; white-space: nowrap; transition: background 0.12s ease, color 0.12s ease;
   }
-  .sb-ico { width: 24px; height: 24px; display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; }
-  .sb-ico svg { width: 28px; height: 28px; display: block; filter: drop-shadow(0 2px 4px rgba(0,0,0,0.15)); }
+  .sb-ico { width: 17.3px; height: 17.3px; display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; }
+  .sb-ico svg { width: 20.2px; height: 20.2px; display: block; filter: drop-shadow(0 2px 2.9px rgba(0,0,0,0.15)); }
   #nav_ico_streams .sb-ico { color: #3b82f6; }
   .sb-item.active .sb-ico { color: #ffffff !important; }
   #nav_ico_pulse .sb-ico { color: #10b981; }
@@ -2243,12 +2243,12 @@ INDEX_HTML = r"""<!DOCTYPE html>
   #nav_ico_iptv .sb-ico { color: #ec4899; }
   #nav_ico_sessions .sb-ico { color: #06b6d4; }
   #nav_ico_tester .sb-ico { color: #ef4444; }
-  .sb-lbl { font-size: 19.2px; font-weight: 700; opacity: 0; transition: opacity 0.1s ease; flex: 1; display: flex; align-items: center; justify-content: space-between; }
+  .sb-lbl { font-size: 13.8px; font-weight: 700; opacity: 0; transition: opacity 0.1s ease; flex: 1; display: flex; align-items: center; justify-content: space-between; }
   .flu-sidebar:hover .sb-lbl { opacity: 1; }
-  .sb-bottom { display: flex; flex-direction: column; gap: 6px; padding: 10px 11px 0 11px; }
-  .sb-divider { margin: 4px 6px; }
-  .sb-seg { display: inline-flex; border-radius: 10px; padding: 3px; gap: 3px; width: 100%; }
-  .sb-seg-btn { flex: 1; border: none; background: transparent; padding: 6px 10px; border-radius: 8px; font-size: 16.2px; font-weight: 700; cursor: pointer; transition: 0.12s ease; text-align: center; }
+  .sb-bottom { display: flex; flex-direction: column; gap: 4.3px; padding: 7.2px 7.9px 0 7.9px; }
+  .sb-divider { margin: 2.9px 4.3px; }
+  .sb-seg { display: inline-flex; border-radius: 7.2px; padding: 2.2px; gap: 2.2px; width: 100%; }
+  .sb-seg-btn { flex: 1; border: none; background: transparent; padding: 4.3px 7.2px; border-radius: 5.8px; font-size: 11.7px; font-weight: 700; cursor: pointer; transition: 0.12s ease; text-align: center; }
   .sb-logout:hover { background: rgba(239, 68, 68, 0.14) !important; color: #ef4444 !important; }
 
   /* ==================== ОСНОВНАЯ ОБЛАСТЬ ==================== */
@@ -2256,38 +2256,38 @@ INDEX_HTML = r"""<!DOCTYPE html>
     flex: 1; height: 100vh; display: flex; flex-direction: column; overflow: hidden; position: relative; z-index: 5;
   }
   .top-header {
-    min-height: 74px; padding: 12px 28px; display: flex; align-items: center; justify-content: space-between;
-    gap: 16px; flex-wrap: wrap; flex-shrink: 0;
+    min-height: 53.3px; padding: 8.6px 20.2px; display: flex; align-items: center; justify-content: space-between;
+    gap: 11.5px; flex-wrap: wrap; flex-shrink: 0;
   }
-  .brand-row { display: flex; align-items: center; gap: 14px; }
-  .star-logo { width: 34px; height: 34px;  }
-  .page-title { font-size: 36.0px; font-weight: 800; letter-spacing: -0.03em; display: flex; align-items: center; gap: 10px; }
+  .brand-row { display: flex; align-items: center; gap: 10.1px; }
+  .star-logo { width: 24.5px; height: 24.5px;  }
+  .page-title { font-size: 25.9px; font-weight: 800; letter-spacing: -0.03em; display: flex; align-items: center; gap: 7.2px; }
   .page-title span.grad {
     background: linear-gradient(90deg, #3b82f6 0%, #6366f1 50%, #8b5cf6 100%);
     -webkit-background-clip: text; -webkit-text-fill-color: transparent;
   }
-  .bc-crumb { font-size: 28.8px; font-weight: 700; display: inline-flex; align-items: center; gap: 10px; }
+  .bc-crumb { font-size: 20.7px; font-weight: 700; display: inline-flex; align-items: center; gap: 7.2px; }
   .bc-link { opacity: 0.6; cursor: pointer; font-weight: 600; }
   .bc-link:hover { opacity: 1; text-decoration: underline; }
-  .bc-sep { opacity: 0.4; font-size: 24.0px; }
+  .bc-sep { opacity: 0.4; font-size: 17.3px; }
 
-  .header-right { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+  .header-right { display: flex; align-items: center; gap: 8.6px; flex-wrap: wrap; }
   .status-capsule {
-    border-radius: 999px; padding: 11px 22px; display: flex; align-items: center; gap: 14px;
-    font-size: 17.4px; font-weight: 600;
+    border-radius: 999px; padding: 7.9px 15.8px; display: flex; align-items: center; gap: 10.1px;
+    font-size: 12.5px; font-weight: 600;
   }
   .status-capsule .sep { opacity: 0.35; }
   .status-capsule b { color: #3b82f6; font-weight: 800; }
 
   .add-plus-btn {
     background: linear-gradient(135deg, #3b82f6 0%, #6366f1 55%, #8b5cf6 100%);
-    color: #fff; border: none; height: 46px; padding: 0 22px;
-    border-radius: 14px; font-size: 19.2px; font-weight: 700; cursor: pointer;
-    display: flex; align-items: center; gap: 8px; box-shadow: 0 6px 16px rgba(99, 102, 241, 0.35);
+    color: #fff; border: none; height: 33.1px; padding: 0 15.8px;
+    border-radius: 10.1px; font-size: 13.8px; font-weight: 700; cursor: pointer;
+    display: flex; align-items: center; gap: 5.8px; box-shadow: 0 4.3px 11.5px rgba(99, 102, 241, 0.35);
   }
   .work-body {
     flex: 1; min-height: 0; overflow: hidden; display: flex; flex-direction: column;
-    padding: 4px 28px 16px 28px;
+    padding: 2.9px 20.2px 11.5px 20.2px;
   }
   #sec_streams { flex: 1; min-height: 0; overflow: hidden; display: flex; flex-direction: column; }
   #sec_stream_page { flex: 1; min-height: 0; overflow: hidden; display: flex; flex-direction: column; }
@@ -2297,76 +2297,76 @@ INDEX_HTML = r"""<!DOCTYPE html>
 
   /* ==================== СТРАНИЦА ПОТОКА (СКРИНШОТЫ 1 + 2 + 3) ==================== */
   .sp-tabs-bar {
-    display: flex; align-items: flex-end; gap: 6px; padding: 0 4px; flex-shrink: 0; margin-bottom: -1px; z-index: 10;
+    display: flex; align-items: flex-end; gap: 4.3px; padding: 0 2.9px; flex-shrink: 0; margin-bottom: -1px; z-index: 10;
   }
   .sp-folder-tab {
-    padding: 11px 24px; border-radius: 12px 12px 0 0; font-size: 18.6px; font-weight: 600;
+    padding: 7.9px 17.3px; border-radius: 8.6px 8.6px 0 0; font-size: 13.4px; font-weight: 600;
     cursor: pointer; transition: 0.15s; user-select: none;
   }
   .sp-scroll-area {
-    flex: 1; min-height: 0; overflow-y: auto; padding-bottom: 16px;
+    flex: 1; min-height: 0; overflow-y: auto; padding-bottom: 11.5px;
   }
   .sp-card {
-    border-radius: 0 18px 18px 18px; padding: 22px 24px; margin-bottom: 16px;
+    border-radius: 0 13px 13px 13px; padding: 15.8px 17.3px; margin-bottom: 11.5px;
   }
   .sp-subcard {
-    border-radius: 18px; padding: 20px 22px; margin-bottom: 16px;
+    border-radius: 13px; padding: 14.4px 15.8px; margin-bottom: 11.5px;
   }
   .sp-grid-2 {
-    display: grid; grid-template-columns: 1.05fr 1fr; gap: 18px; align-items: start;
+    display: grid; grid-template-columns: 1.05fr 1fr; gap: 13px; align-items: start;
   }
   @media (max-width: 1150px) { .sp-grid-2 { grid-template-columns: 1fr; } }
 
   .sp-line-input {
     width: 100%; border: none; border-bottom: 2px solid rgba(148, 163, 184, 0.45);
-    background: transparent; padding: 8px 4px; font-size: 19.2px; font-weight: 600; color: inherit; outline: none;
+    background: transparent; padding: 5.8px 2.9px; font-size: 13.8px; font-weight: 600; color: inherit; outline: none;
     transition: border-color 0.2s;
   }
   .sp-line-input:focus { border-bottom-color: #3b82f6; }
 
   .sp-pill-online {
-    display: inline-flex; align-items: center; padding: 6px 20px; border-radius: 999px;
+    display: inline-flex; align-items: center; padding: 4.3px 14.4px; border-radius: 999px;
     border: 1.5px solid #10b981; background: rgba(16, 185, 129, 0.12); color: #10b981;
-    font-weight: 800; font-size: 18.0px;
+    font-weight: 800; font-size: 13px;
   }
   .sp-pill-wait {
-    display: inline-flex; align-items: center; padding: 6px 20px; border-radius: 999px;
+    display: inline-flex; align-items: center; padding: 4.3px 14.4px; border-radius: 999px;
     border: 1.5px solid #f59e0b; background: rgba(245, 158, 11, 0.12); color: #f59e0b;
-    font-weight: 800; font-size: 18.0px;
+    font-weight: 800; font-size: 13px;
   }
   .sp-pill-off {
-    display: inline-flex; align-items: center; padding: 6px 20px; border-radius: 999px;
+    display: inline-flex; align-items: center; padding: 4.3px 14.4px; border-radius: 999px;
     border: 1.5px solid #94a3b8; background: rgba(148, 163, 184, 0.14); color: #94a3b8;
-    font-weight: 800; font-size: 18.0px;
+    font-weight: 800; font-size: 13px;
   }
   .sp-mode-group {
-    display: inline-flex; border-radius: 10px; overflow: hidden; border: 1.5px solid rgba(59, 130, 246, 0.45);
+    display: inline-flex; border-radius: 7.2px; overflow: hidden; border: 1.5px solid rgba(59, 130, 246, 0.45);
   }
   .sp-mode-btn {
-    border: none; background: transparent; padding: 8px 16px; font-size: 17.4px; font-weight: 700;
-    cursor: pointer; color: inherit; display: inline-flex; align-items: center; gap: 6px;
+    border: none; background: transparent; padding: 5.8px 11.5px; font-size: 12.5px; font-weight: 700;
+    cursor: pointer; color: inherit; display: inline-flex; align-items: center; gap: 4.3px;
   }
   .sp-mode-btn.active {
     background: linear-gradient(135deg, #1D4ED8, #3b82f6); color: #ffffff !important;
   }
 
   .player-checkerboard {
-    width: 100%; height: 340px; border-radius: 12px; overflow: hidden; position: relative;
+    width: 100%; height: 244.8px; border-radius: 8.6px; overflow: hidden; position: relative;
     background-color: #111827;
     background-image:
       linear-gradient(45deg, #1f2937 25%, transparent 25%),
       linear-gradient(-45deg, #1f2937 25%, transparent 25%),
       linear-gradient(45deg, transparent 75%, #1f2937 75%),
       linear-gradient(-45deg, transparent 75%, #1f2937 75%);
-    background-size: 24px 24px;
-    background-position: 0 0, 0 12px, 12px -12px, -12px 0;
-    margin: 14px 0;
+    background-size: 17.3px 17.3px;
+    background-position: 0 0, 0 8.6px, 8.6px -12px, -12px 0;
+    margin: 10.1px 0;
   }
   .player-proto-tabs {
-    display: inline-flex; border-radius: 8px; overflow: hidden; border: 1px solid rgba(148, 163, 184, 0.4);
+    display: inline-flex; border-radius: 5.8px; overflow: hidden; border: 1px solid rgba(148, 163, 184, 0.4);
   }
   .player-proto-tab {
-    border: none; background: transparent; padding: 8px 20px; font-size: 16.8px; font-weight: 800;
+    border: none; background: transparent; padding: 5.8px 14.4px; font-size: 12.1px; font-weight: 800;
     cursor: pointer; color: inherit;
   }
   .player-proto-tab.active {
@@ -2374,247 +2374,249 @@ INDEX_HTML = r"""<!DOCTYPE html>
   }
 
   .media-info-grid {
-    display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-top: 16px;
+    display: grid; grid-template-columns: 1fr 1fr; gap: 10.1px; margin-top: 11.5px;
   }
   .media-info-subcard {
-    padding: 16px; border-radius: 12px;
+    padding: 11.5px; border-radius: 8.6px;
   }
-  .mi-title { font-size: 18.6px; font-weight: 700; display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
-  .mi-track-v { color: #2563eb; text-decoration: underline; font-size: 17.4px; font-weight: 600; display: block; margin-bottom: 6px; }
+  .mi-title { font-size: 13.4px; font-weight: 700; display: flex; align-items: center; gap: 5.8px; margin-bottom: 7.2px; }
+  .mi-track-v { color: #2563eb; text-decoration: underline; font-size: 12.5px; font-weight: 600; display: block; margin-bottom: 4.3px; }
   body.theme-4 .mi-track-v { color: #60a5fa; }
-  .mi-track-a { color: #e11d48; text-decoration: underline; font-size: 17.4px; font-weight: 600; display: block; }
+  .mi-track-a { color: #e11d48; text-decoration: underline; font-size: 12.5px; font-weight: 600; display: block; }
   body.theme-4 .mi-track-a { color: #fb7185; }
 
   /* Вкладка Input со списком URL как на скриншоте 2 */
   .inp-row-item {
-    display: flex; align-items: center; gap: 16px; padding: 14px 0;
+    display: flex; align-items: center; gap: 11.5px; padding: 10.1px 0;
     border-bottom: 1px solid rgba(148, 163, 184, 0.25);
   }
   .inp-state-badge {
-    min-width: 72px; font-size: 17.4px; font-weight: 700; color: #10b981; text-decoration: underline;
+    min-width: 51.8px; font-size: 12.5px; font-weight: 700; color: #10b981; text-decoration: underline;
   }
   .inp-state-badge.standby { color: #94a3b8; text-decoration: none; }
   .inp-arrows { display: flex; flex-direction: column; gap: 2px; }
   .arr-btn {
-    border: none; background: transparent; color: inherit; opacity: 0.55; cursor: pointer; font-size: 15.6px; line-height: 1; padding: 2px 5px;
+    border: none; background: transparent; color: inherit; opacity: 0.55; cursor: pointer; font-size: 11.2px; line-height: 1; padding: 2px 3.6px;
   }
   .arr-btn:hover { opacity: 1; color: #3b82f6; }
 
   /* Вкладка Output как на скриншоте 3 */
   .out-proto-row {
-    display: flex; align-items: center; gap: 16px; margin-bottom: 16px;
+    display: flex; align-items: center; gap: 11.5px; margin-bottom: 11.5px;
   }
   .eo-switch {
-    display: inline-flex; border-radius: 7px; overflow: hidden; border: 1px solid rgba(148, 163, 184, 0.4); flex-shrink: 0;
+    display: inline-flex; border-radius: 5px; overflow: hidden; border: 1px solid rgba(148, 163, 184, 0.4); flex-shrink: 0;
   }
   .eo-btn {
-    border: none; background: rgba(148, 163, 184, 0.18); padding: 7px 13px; font-size: 15.6px; font-weight: 700;
+    border: none; background: rgba(148, 163, 184, 0.18); padding: 5px 9.4px; font-size: 11.2px; font-weight: 700;
     cursor: pointer; color: inherit; opacity: 0.75;
   }
   .eo-btn.active-only { background: #4caf50; color: #ffffff !important; opacity: 1; }
   .eo-btn.active-except { background: #e53935; color: #ffffff !important; opacity: 1; }
   .out-proto-box {
-    flex: 1; display: flex; align-items: center; gap: 12px; padding: 8px 14px; border-radius: 10px;
+    flex: 1; display: flex; align-items: center; gap: 8.6px; padding: 5.8px 10.1px; border-radius: 7.2px;
   }
   .proto-green-tag {
-    display: inline-flex; align-items: center; gap: 5px; padding: 3px 10px; border-radius: 6px;
-    border: 1.5px solid #10b981; color: #10b981; font-size: 15.0px; font-weight: 800; flex-shrink: 0;
+    display: inline-flex; align-items: center; gap: 3.6px; padding: 2.2px 7.2px; border-radius: 4.3px;
+    border: 1.5px solid #10b981; color: #10b981; font-size: 10.8px; font-weight: 800; flex-shrink: 0;
   }
   .out-proto-url {
-    flex: 1; border: none; background: transparent; color: inherit; font-size: 18.0px; outline: none;
+    flex: 1; border: none; background: transparent; color: inherit; font-size: 13px; outline: none;
   }
   .copy-ico-btn {
     border: none; background: transparent; color: inherit; opacity: 0.65; cursor: pointer;
-    font-size: 21.6px; padding: 4px 8px; border-radius: 6px;
+    font-size: 15.6px; padding: 2.9px 5.8px; border-radius: 4.3px;
   }
   .copy-ico-btn:hover { opacity: 1; background: rgba(59, 130, 246, 0.12); color: #3b82f6; }
 
   .sp-footer-bar {
-    flex-shrink: 0; border-radius: 16px; padding: 12px 22px; display: flex; align-items: center;
-    justify-content: space-between; gap: 14px; margin-top: 6px;
+    flex-shrink: 0; border-radius: 11.5px; padding: 8.6px 15.8px; display: flex; align-items: center;
+    justify-content: space-between; gap: 10.1px; margin-top: 4.3px;
   }
   .btn-pink-danger {
     background: linear-gradient(135deg, #f50057, #d81b60); color: #ffffff; border: none;
-    padding: 11px 22px; border-radius: 10px; font-size: 18.6px; font-weight: 700; cursor: pointer;
-    box-shadow: 0 4px 14px rgba(245, 0, 87, 0.35);
+    padding: 7.9px 15.8px; border-radius: 7.2px; font-size: 13.4px; font-weight: 700; cursor: pointer;
+    box-shadow: 0 2.9px 10.1px rgba(245, 0, 87, 0.35);
   }
 
   /* ==================== ТАБЛИЦА СПИСКА ПОТОКОВ ==================== */
   .filter-bar {
     flex-shrink: 0; display: flex; align-items: center; justify-content: space-between;
-    gap: 14px; flex-wrap: wrap; margin-bottom: 10px; padding: 16px 22px; border-radius: 18px;
+    gap: 10px; flex-wrap: nowrap; margin-bottom: 7.2px; padding: 11.5px 15.8px; border-radius: 13px;
   }
-  .search-wrap { position: relative; flex: 1; min-width: 260px; max-width: 440px; }
+  .search-wrap { position: relative; flex: 1 1 140px; min-width: 140px; max-width: 268px; }
   .search-wrap input {
-    width: 100%; height: 46px; padding: 0 16px 0 42px; border-radius: 12px; font-size: 19.2px; font-weight: 500; outline: none;
+    width: 100%; height: 33.1px; padding: 0 11.5px 0 30.2px; border-radius: 8.6px; font-size: 13.8px; font-weight: 500; outline: none;
   }
-  .search-wrap .s-ico { position: absolute; left: 14px; top: 13px; font-size: 19.2px; opacity: 0.6; }
-  .filter-controls { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .search-wrap .s-ico { position: absolute; left: 10.1px; top: 9.4px; font-size: 13.8px; opacity: 0.6; }
+  .filter-controls { display: flex; align-items: center; gap: 7.2px; flex-wrap: nowrap; flex-shrink: 0; }
+    .add-plus-btn, .icon-btn, .status-filter-pill, .buf-mode-btn { white-space: nowrap; flex-shrink: 0; }
+
   .icon-btn {
-    height: 44px; padding: 0 16px; border-radius: 12px; cursor: pointer;
-    font-size: 18.0px; font-weight: 600; display: inline-flex; align-items: center; gap: 8px;
+    height: 31.7px; padding: 0 11.5px; border-radius: 8.6px; cursor: pointer;
+    font-size: 13px; font-weight: 600; display: inline-flex; align-items: center; gap: 5.8px;
   }
   .status-filter-pill {
-    height: 44px; padding: 0 16px; border-radius: 12px; font-size: 18.0px; font-weight: 600;
-    cursor: pointer; display: inline-flex; align-items: center; gap: 9px; user-select: none;
+    height: 31.7px; padding: 0 11.5px; border-radius: 8.6px; font-size: 13px; font-weight: 600;
+    cursor: pointer; display: inline-flex; align-items: center; gap: 6.5px; user-select: none;
   }
   .status-filter-pill.active { border-color: #6366f1 !important; box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.3); }
-  .dot-ico { width: 11px; height: 11px; border-radius: 50%; display: inline-block; }
+  .dot-ico { width: 7.9px; height: 7.9px; border-radius: 50%; display: inline-block; }
   .pagination-row {
-    flex-shrink: 0; display: flex; align-items: center; gap: 18px; font-size: 18.6px; font-weight: 600; margin: 4px 4px 8px 4px; opacity: 0.85;
+    flex-shrink: 0; display: flex; align-items: center; gap: 13px; font-size: 13.4px; font-weight: 600; margin: 2.9px 2.9px 5.8px 2.9px; opacity: 0.85;
   }
-  .pagination-row select { border: none; background: transparent; font-size: 18.6px; font-weight: 700; color: inherit; cursor: pointer; }
+  .pagination-row select { border: none; background: transparent; font-size: 13.4px; font-weight: 700; color: inherit; cursor: pointer; }
 
-  .table-glass-wrap { flex: 1; min-height: 0; overflow-y: auto; border-radius: 18px; }
-  .streams-table { width: 100%; border-collapse: collapse; font-size: 19.2px; }
+  .table-glass-wrap { flex: 1; min-height: 0; overflow-y: auto; border-radius: 13px; }
+  .streams-table { width: 100%; border-collapse: collapse; font-size: 13.8px; }
   .streams-table thead th {
-    position: sticky; top: 0; z-index: 30; backdrop-filter: blur(16px);
-    font-weight: 700; font-size: 18.6px; padding: 15px 16px; text-align: left;
+    position: sticky; top: 0; z-index: 30; backdrop-filter: blur(11.5px);
+    font-weight: 700; font-size: 13.4px; padding: 10.8px 11.5px; text-align: left;
   }
-  .streams-table tbody td { padding: 17px 16px; vertical-align: top; line-height: 1.5; }
-  .st-name { font-weight: 800; font-size: 22.2px; text-decoration: none; cursor: pointer; display: inline-block; margin-bottom: 3px; }
+  .streams-table tbody td { padding: 12.2px 11.5px; vertical-align: top; line-height: 1.5; }
+  .st-name { font-weight: 800; font-size: 16px; text-decoration: none; cursor: pointer; display: inline-block; margin-bottom: 2.2px; }
   .st-name:hover { text-decoration: underline; }
-  .st-sub { font-size: 18.0px; font-weight: 500; opacity: 0.85; }
-  .st-mode { font-size: 16.8px; opacity: 0.68; }
-  .st-status-Online { font-size: 18.0px; color: #10b981; font-weight: 700; margin-top: 4px; }
-  .st-status-Waiting { font-size: 18.0px; color: #f59e0b; font-weight: 700; margin-top: 4px; }
-  .st-status-Disabled { font-size: 18.0px; color: #94a3b8; font-weight: 600; margin-top: 4px; }
-  .st-status-Error { font-size: 18.0px; color: #ef4444; font-weight: 700; margin-top: 4px; }
-  .inp-top { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
-  .inp-url { opacity: 1 !important;  max-width: 400px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 18.0px; font-weight: 500; }
+  .st-sub { font-size: 13px; font-weight: 500; opacity: 0.85; }
+  .st-mode { font-size: 12.1px; opacity: 0.68; }
+  .st-status-Online { font-size: 13px; color: #10b981; font-weight: 700; margin-top: 2.9px; }
+  .st-status-Waiting { font-size: 13px; color: #f59e0b; font-weight: 700; margin-top: 2.9px; }
+  .st-status-Disabled { font-size: 13px; color: #94a3b8; font-weight: 600; margin-top: 2.9px; }
+  .st-status-Error { font-size: 13px; color: #ef4444; font-weight: 700; margin-top: 2.9px; }
+  .inp-top { display: flex; align-items: center; justify-content: space-between; gap: 7.2px; }
+  .inp-url { opacity: 1 !important;  max-width: 288px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; font-weight: 500; }
   .info-tooltip-wrap { position: relative; display: inline-flex; align-items: center; }
   .info-tooltip {
-    visibility: hidden; width: max-content; min-width: 520px; background: rgba(255, 255, 255, 0.98);
-    backdrop-filter: blur(16px); color: #0f172a; text-align: left; border-radius: 12px;
-    padding: 16px; position: absolute; z-index: 1000; bottom: 135%; left: 50%;
-    transform: translateX(-50%) translateY(10px); box-shadow: 0 14px 30px rgba(0,0,0,0.25);
+    visibility: hidden; width: max-content; min-width: 374.4px; background: rgba(255, 255, 255, 0.98);
+    backdrop-filter: blur(11.5px); color: #0f172a; text-align: left; border-radius: 8.6px;
+    padding: 11.5px; position: absolute; z-index: 1000; bottom: 135%; left: 50%;
+    transform: translateX(-50%) translateY(7.2px); box-shadow: 0 10.1px 21.6px rgba(0,0,0,0.25);
     opacity: 0; transition: all 0.25s ease; border: 1.5px solid #cbd5e1; cursor: default; max-height: 40vh; overflow-y: auto;
   }
-  body.theme-4 .info-tooltip { background: rgba(15, 23, 42, 0.98); color: #f8fafc; border-color: rgba(99, 102, 241, 0.5); box-shadow: 0 14px 40px rgba(0,0,0,0.7); }
+  body.theme-4 .info-tooltip { background: rgba(15, 23, 42, 0.98); color: #f8fafc; border-color: rgba(99, 102, 241, 0.5); box-shadow: 0 10.1px 28.8px rgba(0,0,0,0.7); }
   .info-tooltip-wrap:hover .info-tooltip { visibility: visible; opacity: 1; transform: translateX(-50%) translateY(0); }
   .info-badge {
-    width: 23px; height: 23px; border-radius: 50%;
+    width: 16.6px; height: 16.6px; border-radius: 50%;
     background: linear-gradient(135deg, #3b82f6, #6366f1); color: #fff;
-    font-size: 15.0px; font-weight: 800; font-family: serif; font-style: italic;
+    font-size: 10.8px; font-weight: 800; font-family: serif; font-style: italic;
     display: inline-flex; align-items: center; justify-content: center; cursor: pointer; flex-shrink: 0;
   }
-  .input-dots { display: flex; align-items: center; gap: 6px; margin: 7px 0; }
-  .inp-dot { width: 12.75px; height: 12.75px; border-radius: 50%; background: #94a3b8; opacity: 0.45; cursor: pointer; display: inline-block; }
-  .inp-dot.active-online { background: #10b981; opacity: 1; box-shadow: 0 0 9px rgba(16,185,129,0.7); animation: pulseGlow 2s infinite; filter: drop-shadow(0 0 3px rgba(16,185,129,0.4)); }
+  .input-dots { display: flex; align-items: center; gap: 4.3px; margin: 5px 0; }
+  .inp-dot { width: 9.2px; height: 9.2px; border-radius: 50%; background: #94a3b8; opacity: 0.45; cursor: pointer; display: inline-block; }
+  .inp-dot.active-online { background: #10b981; opacity: 1; box-shadow: 0 0 6.5px rgba(16,185,129,0.7); animation: pulseGlow 2s infinite; filter: drop-shadow(0 0 2.2px rgba(16,185,129,0.4)); }
   .inp-dot.active-wait { background: #f59e0b; opacity: 1; }
   .inp-dot.active-err { background: #ef4444; opacity: 1; }
-  .inp-meta { font-size: 17.4px; opacity: 0.88; }
+  .inp-meta { font-size: 12.5px; opacity: 0.88; }
 
   .buf-toggle-group {
-    display: inline-flex; align-items: center; border-radius: 9px; padding: 2px;
-    background: rgba(148, 163, 184, 0.16); border: 1px solid rgba(148, 163, 184, 0.32); margin-bottom: 5px;
+    display: inline-flex; align-items: center; border-radius: 6.5px; padding: 2px;
+    background: rgba(148, 163, 184, 0.16); border: 1px solid rgba(148, 163, 184, 0.32); margin-bottom: 3.6px;
   }
   .buf-mode-btn {
-    border: none; background: transparent; padding: 5px 12px; border-radius: 7px;
-    font-size: 16.2px; font-weight: 700; cursor: pointer; color: inherit; opacity: 0.72; transition: 0.14s;
+    border: none; background: transparent; padding: 3.6px 8.6px; border-radius: 5px;
+    font-size: 11.7px; font-weight: 700; cursor: pointer; color: inherit; opacity: 0.72; transition: 0.14s;
   }
   .buf-mode-btn.active {
     background: linear-gradient(135deg, #3b82f6, #6366f1); color: #fff !important; opacity: 1;
-    box-shadow: 0 2px 8px rgba(59, 130, 246, 0.35);
+    box-shadow: 0 2px 5.8px rgba(59, 130, 246, 0.35);
   }
   .buf-pill {
-    display: inline-block; padding: 3px 9px; border-radius: 6px; font-size: 15.6px; font-weight: 700;
-    background: rgba(16, 185, 129, 0.14); color: #10b981; margin-top: 4px;
+    display: inline-block; padding: 2.2px 6.5px; border-radius: 4.3px; font-size: 11.2px; font-weight: 700;
+    background: rgba(16, 185, 129, 0.14); color: #10b981; margin-top: 2.9px;
   }
 
-  .pulse-row-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; margin-top: 14px; }
+  .pulse-row-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 13px; margin-top: 10.1px; }
   @media (max-width: 1200px) { .pulse-row-3 { grid-template-columns: 1fr; } }
-  .pulse-chart-card { padding: 20px 22px; border-radius: 20px; position: relative; display: flex; flex-direction: column; justify-content: space-between; }
-  .pulse-chart-head { display: flex; flex-direction: column; gap: 8px; margin-bottom: 12px; }
-  .pulse-chart-title { font-size: 21.0px; font-weight: 800; letter-spacing: -0.01em; }
-  .pulse-legend { display: flex; align-items: center; gap: 14px; font-size: 16.8px; font-weight: 700; flex-wrap: wrap; }
-  .leg-dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; margin-right: 6px; }
-  canvas.pulse-canvas { width: 100%; height: 250px; display: block; border-radius: 12px; }
+  .pulse-chart-card { padding: 14.4px 15.8px; border-radius: 14.4px; position: relative; display: flex; flex-direction: column; justify-content: space-between; }
+  .pulse-chart-head { display: flex; flex-direction: column; gap: 5.8px; margin-bottom: 8.6px; }
+  .pulse-chart-title { font-size: 15.1px; font-weight: 800; letter-spacing: -0.01em; }
+  .pulse-legend { display: flex; align-items: center; gap: 10.1px; font-size: 12.1px; font-weight: 700; flex-wrap: wrap; }
+  .leg-dot { width: 7.2px; height: 7.2px; border-radius: 50%; display: inline-block; margin-right: 4.3px; }
+  canvas.pulse-canvas { width: 100%; height: 180px; display: block; border-radius: 8.6px; }
 
-  .muted-cell { font-size: 18.6px; opacity: 0.85; font-weight: 500; }
-  .out-cell-wrap { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; }
-  .out-left { font-size: 18.0px; }
-  .more-link { color: #3b82f6; font-weight: 700; font-size: 17.4px; cursor: pointer; text-decoration: underline; display: inline-block; margin-top: 4px; }
+  .muted-cell { font-size: 13.4px; opacity: 0.85; font-weight: 500; }
+  .out-cell-wrap { display: flex; align-items: flex-start; justify-content: space-between; gap: 10.1px; }
+  .out-left { font-size: 13px; }
+  .more-link { color: #3b82f6; font-weight: 700; font-size: 12.5px; cursor: pointer; text-decoration: underline; display: inline-block; margin-top: 2.9px; }
   .more-box {
-    margin-top: 10px; padding: 10px 12px; background: rgba(248, 250, 252, 0.95);
-    border: 1px solid #cbd5e1; border-radius: 10px; font-size: 16.2px; display: none; min-width: 310px;
+    margin-top: 7.2px; padding: 7.2px 8.6px; background: rgba(248, 250, 252, 0.95);
+    border: 1px solid #cbd5e1; border-radius: 7.2px; font-size: 11.7px; display: none; min-width: 223.2px;
   }
-  .more-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 4px 0; }
-  .more-row code { font-size: 15.0px; word-break: break-all; }
-  .out-actions { display: flex; align-items: center; gap: 9px; flex-shrink: 0; }
+  .more-row { display: flex; align-items: center; justify-content: space-between; gap: 7.2px; padding: 2.9px 0; }
+  .more-row code { font-size: 10.8px; word-break: break-all; }
+  .out-actions { display: flex; align-items: center; gap: 6.5px; flex-shrink: 0; }
   .sq-btn {
-    width: 35px; height: 34px; border: 1.5px solid #93c5fd; background: #fff; color: #2563eb;
-    border-radius: 8px; cursor: pointer; display: inline-flex; align-items: center; justify-content: center;
-    font-size: 18.6px; font-weight: 700;
+    width: 25.2px; height: 24.5px; border: 1.5px solid #93c5fd; background: #fff; color: #2563eb;
+    border-radius: 5.8px; cursor: pointer; display: inline-flex; align-items: center; justify-content: center;
+    font-size: 13.4px; font-weight: 700;
   }
-  .flu-switch { position: relative; display: inline-block; width: 42px; height: 23px; cursor: pointer; }
+  .flu-switch { position: relative; display: inline-block; width: 30.2px; height: 16.6px; cursor: pointer; }
   .flu-switch input { opacity: 0; width: 0; height: 0; }
-  .flu-slider { position: absolute; inset: 0; background-color: #94a3b8; border-radius: 23px; transition: 0.2s; }
+  .flu-slider { position: absolute; inset: 0; background-color: #94a3b8; border-radius: 16.6px; transition: 0.2s; }
   .flu-slider:before {
-    position: absolute; content: ""; height: 17px; width: 17px; left: 3px; bottom: 3px;
+    position: absolute; content: ""; height: 12.2px; width: 12.2px; left: 2.2px; bottom: 2.2px;
     background-color: white; border-radius: 50%; transition: 0.2s;
   }
   .flu-switch input:checked + .flu-slider { background: linear-gradient(90deg, #3b82f6, #6366f1); }
-  .flu-switch input:checked + .flu-slider:before { transform: translateX(19px); }
+  .flu-switch input:checked + .flu-slider:before { transform: translateX(13.7px); }
   .modal-backdrop {
-    position: fixed; inset: 0; background: rgba(7, 10, 20, 0.65); backdrop-filter: blur(8px);
+    position: fixed; inset: 0; background: rgba(7, 10, 20, 0.65); backdrop-filter: blur(5.8px);
     display: none; align-items: center; justify-content: center; z-index: 400;
   }
   .modal-card {
-    width: 760px; max-width: 95vw; max-height: 90vh; border-radius: 22px;
-    box-shadow: 0 25px 65px rgba(0,0,0,0.4); display: flex; flex-direction: column; overflow: hidden;
+    width: 547.2px; max-width: 95vw; max-height: 90vh; border-radius: 15.8px;
+    box-shadow: 0 18px 46.8px rgba(0,0,0,0.4); display: flex; flex-direction: column; overflow: hidden;
   }
   .modal-head {
-    padding: 18px 24px; border-bottom: 1px solid rgba(148, 163, 184, 0.25);
-    display: flex; align-items: center; justify-content: space-between; font-size: 24.0px;
+    padding: 13px 17.3px; border-bottom: 1px solid rgba(148, 163, 184, 0.25);
+    display: flex; align-items: center; justify-content: space-between; font-size: 17.3px;
   }
-  .modal-body { padding: 24px; overflow-y: auto; flex: 1; }
-  .form-row { margin-bottom: 16px; }
-  .form-row label { display: block; font-size: 18.0px; font-weight: 700; margin-bottom: 6px; opacity: 0.85; }
-  .form-input { width: 100%; padding: 11px 14px; border-radius: 10px; font-size: 19.2px; outline: none; }
+  .modal-body { padding: 17.3px; overflow-y: auto; flex: 1; }
+  .form-row { margin-bottom: 11.5px; }
+  .form-row label { display: block; font-size: 13px; font-weight: 700; margin-bottom: 4.3px; opacity: 0.85; }
+  .form-input { width: 100%; padding: 7.9px 10.1px; border-radius: 7.2px; font-size: 13.8px; outline: none; }
   .btn {
     background: linear-gradient(135deg, #3b82f6 0%, #6366f1 55%, #8b5cf6 100%);
-    color: #fff; border: none; padding: 11px 22px; border-radius: 10px; font-size: 18.6px; cursor: pointer; font-weight: 700;
+    color: #fff; border: none; padding: 7.9px 15.8px; border-radius: 7.2px; font-size: 13.4px; cursor: pointer; font-weight: 700;
   }
   .btn-outline { background: rgba(148, 163, 184, 0.15); color: inherit; border: 1px solid rgba(148, 163, 184, 0.4); }
   .btn-danger { background: #ef4444; color: #fff; }
-  .btn-sm { padding: 7px 14px; font-size: 16.8px; border-radius: 8px; }
-  .glass-panel { padding: 22px; border-radius: 18px; }
+  .btn-sm { padding: 5px 10.1px; font-size: 12.1px; border-radius: 5.8px; }
+  .glass-panel { padding: 15.8px; border-radius: 13px; }
   .toast {
-    position: fixed; bottom: 24px; right: 24px;
+    position: fixed; bottom: 17.3px; right: 17.3px;
     background: linear-gradient(90deg, #1e293b, #312e81); color: #fff;
-    padding: 13px 22px; border-radius: 12px; font-size: 18.0px; font-weight: 600;
-    display: none; z-index: 999; box-shadow: 0 10px 25px rgba(0,0,0,0.35);
+    padding: 9.4px 15.8px; border-radius: 8.6px; font-size: 13px; font-weight: 600;
+    display: none; z-index: 999; box-shadow: 0 7.2px 18px rgba(0,0,0,0.35);
   }
 
   /* === FORCE ALIGNMENT CSS === */
-  .flu-sidebar { padding-top: 12px !important; }
-  .sb-brand { height: 50px !important; margin-bottom: 22px !important; }
-  .top-header { height: 72px !important; min-height: 72px !important; padding: 0 28px !important; margin: 0 !important; }
-  .work-body { padding: 0 28px 16px 28px !important; }
-  .filter-bar { padding: 12px 18px !important; margin-top: 0 !important; }
-  #nav_ico_streams { height: 46px !important; margin-top: 0 !important; }
-  .add-plus-btn { height: 46px !important; }
+  .flu-sidebar { padding-top: 8.6px !important; }
+  .sb-brand { height: 36px !important; margin-bottom: 15.8px !important; }
+  .top-header { height: 51.8px !important; min-height: 51.8px !important; padding: 0 20.2px !important; margin: 0 !important; }
+  .work-body { padding: 0 20.2px 11.5px 20.2px !important; }
+  .filter-bar { padding: 8.6px 13px !important; margin-top: 0 !important; }
+  #nav_ico_streams { height: 33.1px !important; margin-top: 0 !important; }
+  .add-plus-btn { height: 33.1px !important; }
 
   .out-grid-caption {
-    font-size: 16.8px !important;
+    font-size: 12.1px !important;
     font-weight: 700 !important;
     opacity: 0.85 !important;
-    margin: 12px 0 6px 140px !important;
+    margin: 8.6px 0 4.3px 100.8px !important;
   }
   .out-grid-row {
     display: grid !important;
-    grid-template-columns: 124px 1fr !important;
+    grid-template-columns: 89.3px 1fr !important;
     align-items: center !important;
-    gap: 16px !important;
-    margin-bottom: 14px !important;
+    gap: 11.5px !important;
+    margin-bottom: 10.1px !important;
   }
   .eo-switch {
-    width: 124px !important;
-    height: 44px !important;
+    width: 89.3px !important;
+    height: 31.7px !important;
     display: grid !important;
     grid-template-columns: 1fr 1fr !important;
-    border-radius: 8px !important;
+    border-radius: 5.8px !important;
     overflow: hidden !important;
   }
   .eo-btn {
@@ -2627,42 +2629,42 @@ INDEX_HTML = r"""<!DOCTYPE html>
   }
   .out-proto-box {
     display: grid !important;
-    grid-template-columns: 108px 1fr auto !important;
+    grid-template-columns: 77.8px 1fr auto !important;
     align-items: center !important;
-    gap: 14px !important;
-    height: 52px !important;
-    padding: 0 8px 0 12px !important;
-    border-radius: 12px !important;
+    gap: 10.1px !important;
+    height: 37.4px !important;
+    padding: 0 5.8px 0 8.6px !important;
+    border-radius: 8.6px !important;
   }
   .out-copy-btn {
-    height: 38px !important;
-    padding: 0 18px !important;
-    border-radius: 9px !important;
+    height: 27.4px !important;
+    padding: 0 13px !important;
+    border-radius: 6.5px !important;
     border: none !important;
-    font-size: 17.4px !important;
+    font-size: 12.5px !important;
     font-weight: 700 !important;
     cursor: pointer !important;
     display: inline-flex !important;
     align-items: center !important;
     justify-content: center !important;
-    gap: 7px !important;
+    gap: 5px !important;
     color: #ffffff !important;
     white-space: nowrap !important;
     transition: transform 0.12s ease, box-shadow 0.15s ease, opacity 0.15s ease !important;
   }
   body.theme-2 .out-copy-btn {
     background: linear-gradient(135deg, #2563eb 0%, #4f46e5 100%) !important;
-    box-shadow: 0 4px 12px rgba(37, 99, 235, 0.28) !important;
+    box-shadow: 0 2.9px 8.6px rgba(37, 99, 235, 0.28) !important;
   }
   body.theme-4 .out-copy-btn {
     background: linear-gradient(135deg, #3b82f6 0%, #6366f1 55%, #8b5cf6 100%) !important;
-    box-shadow: 0 4px 14px rgba(99, 102, 241, 0.42) !important;
+    box-shadow: 0 2.9px 10.1px rgba(99, 102, 241, 0.42) !important;
   }
   .out-copy-btn:hover { transform: translateY(-1px) !important; opacity: 0.94 !important; }
   .out-copy-btn:active { transform: translateY(0) !important; }
   .proto-green-tag {
-    width: 108px !important;
-    height: 28px !important;
+    width: 77.8px !important;
+    height: 20.2px !important;
     display: inline-flex !important;
     align-items: center !important;
     justify-content: center !important;
@@ -2674,55 +2676,55 @@ INDEX_HTML = r"""<!DOCTYPE html>
   .copy-ico-btn {
     background: linear-gradient(135deg, #2563eb, #4f46e5) !important;
     color: #ffffff !important; opacity: 1 !important;
-    height: 36px !important; padding: 0 16px !important;
-    border-radius: 8px !important; font-size: 16.8px !important;
+    height: 25.9px !important; padding: 0 11.5px !important;
+    border-radius: 5.8px !important; font-size: 12.1px !important;
     font-weight: 700 !important; display: inline-flex !important;
     align-items: center !important; justify-content: center !important;
-    gap: 6px !important; width: auto !important;
+    gap: 4.3px !important; width: auto !important;
   }
   .out-proto-box {
-    grid-template-columns: 108px 1fr auto !important;
+    grid-template-columns: 77.8px 1fr auto !important;
   }
 
 
   /* === AQUA REDESIGN OVERRIDES (THEME 2) === */
   body.theme-2 { background: linear-gradient(135deg, #d6ebfe 0%, #b4dcfc 100%); color: #0f172a; }
-  body.theme-2 .flu-sidebar { background: #133c7a; border-right: none; box-shadow: 4px 0 24px rgba(0,0,0,0.15); }
+  body.theme-2 .flu-sidebar { background: #133c7a; border-right: none; box-shadow: 2.9px 0 17.3px rgba(0,0,0,0.15); }
   body.theme-2 .flu-sidebar .sb-logo-title, body.theme-2 .flu-sidebar .sb-chev { color: #ffffff !important; }
   body.theme-2 .flu-sidebar .sb-item { color: #93c5fd; }
   body.theme-2 .flu-sidebar .sb-item:hover { background: rgba(255, 255, 255, 0.1); color: #ffffff; }
-  body.theme-2 .flu-sidebar .sb-item.active { background: #2563eb; color: #ffffff; box-shadow: 0 4px 14px rgba(0,0,0,0.25); }
+  body.theme-2 .flu-sidebar .sb-item.active { background: #2563eb; color: #ffffff; box-shadow: 0 2.9px 10.1px rgba(0,0,0,0.25); }
   body.theme-2 .flu-sidebar .sb-seg { background: rgba(0,0,0,0.25); border: none; }
   body.theme-2 .flu-sidebar .sb-seg-btn { color: #93c5fd; }
   body.theme-2 .flu-sidebar .sb-seg-btn.active { background: #3b82f6; color: #ffffff; box-shadow: none; }
   body.theme-2 .sb-divider { border-top: 1px solid rgba(255,255,255,0.1); }
   
-  body.theme-2 .filter-bar { background: rgba(255, 255, 255, 0.35); border: 1px solid rgba(255, 255, 255, 0.6); box-shadow: 0 4px 16px rgba(0,0,0,0.02); }
-  body.theme-2 .add-plus-btn { background: #133c7a; box-shadow: 0 4px 12px rgba(19,60,122,0.3); border-radius: 8px; }
-  body.theme-2 .status-filter-pill { background: #ffffff; border-radius: 8px; border: 1px solid #bae6fd; font-size: 14px; }
+  body.theme-2 .filter-bar { background: rgba(255, 255, 255, 0.35); border: 1px solid rgba(255, 255, 255, 0.6); box-shadow: 0 2.9px 11.5px rgba(0,0,0,0.02); }
+  body.theme-2 .add-plus-btn { background: #133c7a; box-shadow: 0 2.9px 8.6px rgba(19,60,122,0.3); border-radius: 5.8px; }
+  body.theme-2 .status-filter-pill { background: #ffffff; border-radius: 5.8px; border: 1px solid #bae6fd; font-size: 10.1px; }
   body.theme-2 .status-filter-pill.active { background: #133c7a; color: #ffffff; border-color: #133c7a; }
   body.theme-2 .status-filter-pill.active b { color: #ffffff !important; }
   
   body.theme-2 .table-glass-wrap { background: transparent; border: none; box-shadow: none; }
-  body.theme-2 .streams-table { border-collapse: separate; border-spacing: 0 10px; }
-  body.theme-2 .streams-table thead th { background: transparent; border: none; color: #1e3a8a; font-weight: 800; padding-bottom: 4px; }
-  body.theme-2 .streams-table tbody tr { background: #ffffff; box-shadow: 0 4px 12px rgba(0,0,0,0.03); transition: transform 0.1s ease; }
-  body.theme-2 .streams-table tbody tr:hover { transform: translateY(-2px); box-shadow: 0 6px 16px rgba(0,0,0,0.08); }
-  body.theme-2 .streams-table tbody td { border: none; padding: 18px 16px; }
-  body.theme-2 .streams-table tbody td:first-child { border-radius: 12px 0 0 12px; }
-  body.theme-2 .streams-table tbody td:last-child { border-radius: 0 12px 12px 0; }
+  body.theme-2 .streams-table { border-collapse: separate; border-spacing: 0 7.2px; }
+  body.theme-2 .streams-table thead th { background: transparent; border: none; color: #1e3a8a; font-weight: 800; padding-bottom: 2.9px; }
+  body.theme-2 .streams-table tbody tr { background: #ffffff; box-shadow: 0 2.9px 8.6px rgba(0,0,0,0.03); transition: transform 0.1s ease; }
+  body.theme-2 .streams-table tbody tr:hover { transform: translateY(-2px); box-shadow: 0 4.3px 11.5px rgba(0,0,0,0.08); }
+  body.theme-2 .streams-table tbody td { border: none; padding: 13px 11.5px; }
+  body.theme-2 .streams-table tbody td:first-child { border-radius: 8.6px 0 0 8.6px; }
+  body.theme-2 .streams-table tbody td:last-child { border-radius: 0 8.6px 8.6px 0; }
   
-  body.theme-2 .st-status-Online { background: #d1fae5; color: #065f46; display: inline-block; padding: 3px 12px; border-radius: 999px; border: 1px solid #a7f3d0; font-size: 13.5px; margin-top: 8px; }
-  body.theme-2 .st-status-Waiting { background: #fef3c7; color: #92400e; display: inline-block; padding: 3px 12px; border-radius: 999px; border: 1px solid #fde68a; font-size: 13.5px; margin-top: 8px; }
-  body.theme-2 .st-status-Disabled { background: #f1f5f9; color: #475569; display: inline-block; padding: 3px 12px; border-radius: 999px; border: 1px solid #e2e8f0; font-size: 13.5px; margin-top: 8px; }
-  body.theme-2 .st-status-Error { background: #fee2e2; color: #b91c1c; display: inline-block; padding: 3px 12px; border-radius: 999px; border: 1px solid #fecaca; font-size: 13.5px; margin-top: 8px; }
+  body.theme-2 .st-status-Online { background: #d1fae5; color: #065f46; display: inline-block; padding: 2.2px 8.6px; border-radius: 999px; border: 1px solid #a7f3d0; font-size: 9.7px; margin-top: 5.8px; }
+  body.theme-2 .st-status-Waiting { background: #fef3c7; color: #92400e; display: inline-block; padding: 2.2px 8.6px; border-radius: 999px; border: 1px solid #fde68a; font-size: 9.7px; margin-top: 5.8px; }
+  body.theme-2 .st-status-Disabled { background: #f1f5f9; color: #475569; display: inline-block; padding: 2.2px 8.6px; border-radius: 999px; border: 1px solid #e2e8f0; font-size: 9.7px; margin-top: 5.8px; }
+  body.theme-2 .st-status-Error { background: #fee2e2; color: #b91c1c; display: inline-block; padding: 2.2px 8.6px; border-radius: 999px; border: 1px solid #fecaca; font-size: 9.7px; margin-top: 5.8px; }
   
-  body.theme-2 .sq-btn { border-radius: 50%; background: #e0f2fe; color: #0284c7; border: 1px solid #bae6fd; width: 38px; height: 38px; }
+  body.theme-2 .sq-btn { border-radius: 50%; background: #e0f2fe; color: #0284c7; border: 1px solid #bae6fd; width: 27.4px; height: 27.4px; }
   body.theme-2 .sq-btn:hover { background: #bae6fd; }
-  body.theme-2 .buf-toggle-group { background: #e0f2fe; border: 1px solid #bae6fd; border-radius: 8px; }
+  body.theme-2 .buf-toggle-group { background: #e0f2fe; border: 1px solid #bae6fd; border-radius: 5.8px; }
   body.theme-2 .buf-mode-btn.active { background: #133c7a; color: #ffffff !important; box-shadow: none; }
   
-  body.theme-2 .top-header .status-capsule { background: transparent; border: none; box-shadow: none; font-size: 14px; color: #1e3a8a; }
+  body.theme-2 .top-header .status-capsule { background: transparent; border: none; box-shadow: none; font-size: 10.1px; color: #1e3a8a; }
   body.theme-2 .top-header .status-capsule b { color: #2563eb; }
   body.theme-2 .search-wrap input { background: #ffffff; border: 1px solid #bae6fd; }
 </style>
@@ -2875,8 +2877,8 @@ INDEX_HTML = r"""<!DOCTYPE html>
         </div>
         <div class="filter-controls">
           <button class="icon-btn" onclick="reloadAllStreams()">&#8635; <span id="i18n_reload_all">Перегрузить все</span></button>
-          <div class="icon-btn" style="padding:0 10px; gap:6px;">
-            <span style="font-size: 16.8px;opacity:0.85;" id="i18n_buf_all_lbl">Буфер всех:</span>
+          <div class="icon-btn" style="padding:0 7.2px; gap:4.3px;">
+            <span style="font-size: 12.1px;opacity:0.85;" id="i18n_buf_all_lbl">Буфер всех:</span>
             <button class="buf-mode-btn" id="i18n_buf_all_30" onclick="setStreamBufferMode('__all__', '30s')">30 сек</button>
             <button class="buf-mode-btn" id="i18n_buf_all_norm" onclick="setStreamBufferMode('__all__', 'normal')">Обычный</button>
           </div>
@@ -2886,7 +2888,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
             <option value="bitrate" id="i18n_sort_br">Сортировка: Битрейт</option>
             <option value="clients" id="i18n_sort_cl">Сортировка: Зрители</option>
           </select>
-          <span style="font-size: 17.4px; font-weight:600;" id="i18n_filter_lbl">Статус:</span>
+          <span style="font-size: 12.5px; font-weight:600;" id="i18n_filter_lbl">Статус:</span>
           <div class="status-filter-pill" id="f_pill_Online" onclick="toggleStatusFilter('Online')">
             <span class="dot-ico" style="background:#10b981;"></span><span>Online (<b id="cnt_Online">0</b>)</span>
           </div>
@@ -2909,7 +2911,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
         <table class="streams-table">
           <thead>
             <tr>
-              <th style="width:42px;"><input type="checkbox" onclick="toggleAllCheckboxes(this)"></th>
+              <th style="width:30.2px;"><input type="checkbox" onclick="toggleAllCheckboxes(this)"></th>
               <th style="width:18%;" id="th_stream">Канал (Stream)</th>
               <th style="width:30%;" id="th_input">Источник (Input)</th>
               <th style="width:16%;" id="th_transcode">Буфер</th>
@@ -2937,28 +2939,28 @@ INDEX_HTML = r"""<!DOCTYPE html>
         <!-- ВКЛАДКА 1: OVERVIEW (Скриншот 1) -->
         <div id="sp_pane_overview">
           <div class="sp-card">
-            <div style="font-size: 20.4px; font-weight:800; margin-bottom:14px;" id="i18n_sp_desc_head">Описание и параметры канала (Description)</div>
-            <div style="display:grid; grid-template-columns: 1fr 1fr 1.2fr 1fr 0.8fr; gap:20px; align-items:end;">
+            <div style="font-size: 14.7px; font-weight:800; margin-bottom:10.1px;" id="i18n_sp_desc_head">Описание и параметры канала (Description)</div>
+            <div style="display:grid; grid-template-columns: 1fr 1fr 1.2fr 1fr 0.8fr; gap:14.4px; align-items:end;">
               <div>
-                <label id="i18n_lbl_name" style="font-size: 15.6px; opacity:0.65; font-weight:700;" id="i18n_lbl_name">Name (ID)</label>
-                <div style="display:flex; align-items:center; gap:6px;">
+                <label id="i18n_lbl_name" style="font-size: 11.2px; opacity:0.65; font-weight:700;" id="i18n_lbl_name">Name (ID)</label>
+                <div style="display:flex; align-items:center; gap:4.3px;">
                   <input type="text" id="f_name" class="sp-line-input" placeholder="southpark">
                   <span class="info-badge">i</span>
                 </div>
               </div>
               <div>
-                <label id="i18n_lbl_title" style="font-size: 15.6px; opacity:0.65; font-weight:700;" id="i18n_lbl_title">Title</label>
-                <div style="display:flex; align-items:center; gap:6px;">
+                <label id="i18n_lbl_title" style="font-size: 11.2px; opacity:0.65; font-weight:700;" id="i18n_lbl_title">Title</label>
+                <div style="display:flex; align-items:center; gap:4.3px;">
                   <input type="text" id="f_title" class="sp-line-input" placeholder="South Park TV">
                   <span class="info-badge">i</span>
                 </div>
               </div>
               <div>
-                <label id="i18n_lbl_desc" style="font-size: 15.6px; opacity:0.65; font-weight:700;" id="i18n_lbl_desc">Description</label>
+                <label id="i18n_lbl_desc" style="font-size: 11.2px; opacity:0.65; font-weight:700;" id="i18n_lbl_desc">Description</label>
                 <input type="text" id="f_desc" class="sp-line-input" placeholder="Описание потока...">
               </div>
               <div>
-                <label style="font-size: 15.6px; opacity:0.65; font-weight:700;" id="i18n_f_qual_lbl">Quality Profile</label>
+                <label style="font-size: 11.2px; opacity:0.65; font-weight:700;" id="i18n_f_qual_lbl">Quality Profile</label>
                 <select id="f_quality" class="sp-line-input">
                   <option value="best" id="i18n_opt_q_best">Auto Best (4K / 1080p)</option>
                   <option value="1080p">1080p (Full HD)</option>
@@ -2967,7 +2969,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
                 </select>
               </div>
               <div>
-                <label id="i18n_lbl_ram" style="font-size: 15.6px; opacity:0.65; font-weight:700;" id="i18n_lbl_ram">RAM Buffer</label>
+                <label id="i18n_lbl_ram" style="font-size: 11.2px; opacity:0.65; font-weight:700;" id="i18n_lbl_ram">RAM Buffer</label>
                 <select id="f_buf_mode" class="sp-line-input">
                   <option value="30s">30s Anti-Freeze</option>
                   <option value="normal">Normal (6s)</option>
@@ -2979,8 +2981,8 @@ INDEX_HTML = r"""<!DOCTYPE html>
           <div class="sp-grid-2">
             <!-- Левая колонка: управление + встроенный плеер (Скриншот 1) -->
             <div class="sp-card sp-subcard">
-              <div style="display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:10px;">
-                <div style="display:flex; gap:10px;">
+              <div style="display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:7.2px;">
+                <div style="display:flex; gap:7.2px;">
                   <button class="btn btn-sm" id="sp_btn_disable" onclick="toggleCurrentStreamEnable()" style="background:#1D4ED8;">Disable</button>
                   <button class="btn-pink-danger btn-sm" onclick="reloadStream(EDITING_NAME)">&#8635; Restart</button>
                 </div>
@@ -2996,7 +2998,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
                 <video id="sp_overview_video" controls autoplay muted style="width:100%; height:100%; object-fit:contain;"></video>
               </div>
 
-              <div style="display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:12px;">
+              <div style="display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:8.6px;">
                 <div class="player-proto-tabs">
                   <button class="player-proto-tab active" id="ov_p_hls" onclick="playOverviewStream('hls')">HLS</button>
                   <button class="player-proto-tab" id="ov_p_mse" onclick="playOverviewStream('mse')">MSE</button>
@@ -3010,9 +3012,9 @@ INDEX_HTML = r"""<!DOCTYPE html>
             <!-- Правая колонка: статус, Input/Output media info и живой график потока (Скриншот 1) -->
             <div>
               <div class="sp-card sp-subcard">
-                <div style="display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:12px;">
+                <div style="display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:8.6px;">
                   <span class="sp-pill-online" id="sp_ov_status_pill">Online</span>
-                  <div style="display:flex; align-items:center; gap:18px; font-size: 18.6px; font-weight:700;">
+                  <div style="display:flex; align-items:center; gap:13px; font-size: 13.4px; font-weight:700;">
                     <span>&#127916; <span id="sp_ov_res">FHD</span></span>
                     <span>&#128202; <span id="sp_ov_br">0 kbit/s</span></span>
                     <span>&#128336; <span id="sp_ov_up">0m</span></span>
@@ -3022,23 +3024,23 @@ INDEX_HTML = r"""<!DOCTYPE html>
                 <div class="media-info-grid">
                   <div class="media-info-subcard">
                     <div class="mi-title">&#10142; Input media info</div>
-                    <div id="sp_mi_in_box"><div style="opacity:0.5;font-size:14.4px;margin-top:8px;">No data</div></div>
+                    <div id="sp_mi_in_box"><div style="opacity:0.5;font-size:10.4px;margin-top:5.8px;">No data</div></div>
                   </div>
                   <div class="media-info-subcard">
                     <div class="mi-title">&#11013; Output media info</div>
-                    <div id="sp_mi_out_box"><div style="opacity:0.5;font-size:14.4px;margin-top:8px;">No data</div></div>
+                    <div id="sp_mi_out_box"><div style="opacity:0.5;font-size:10.4px;margin-top:5.8px;">No data</div></div>
                   </div>
                 </div>
               </div>
 
               <div class="sp-card sp-subcard">
-                <div style="display:flex; align-items:center; justify-content:center; gap:20px; margin-bottom:10px; font-size: 17.4px; font-weight:700;">
+                <div style="display:flex; align-items:center; justify-content:center; gap:14.4px; margin-bottom:7.2px; font-size: 12.5px; font-weight:700;">
                   <span><i class="leg-dot" style="background:#ef4444;"></i>In</span>
                   <span><i class="leg-dot" style="background:#10b981;"></i>Out</span>
                   <span><i class="leg-dot" style="background:#2563eb;"></i>Clients</span>
                   <span><i class="leg-dot" style="background:#6366f1;"></i>media_push</span>
                 </div>
-                <canvas id="canvas_stream_ov" style="width:100%; height:195px; display:block;"></canvas>
+                <canvas id="canvas_stream_ov" style="width:100%; height:140.4px; display:block;"></canvas>
               </div>
             </div>
           </div>
@@ -3047,28 +3049,28 @@ INDEX_HTML = r"""<!DOCTYPE html>
         <!-- ВКЛАДКА 2: INPUT С ВЫБОРОМ USER-AGENT (Скриншот 2) -->
         <div id="sp_pane_input" style="display:none;">
           <div class="sp-card">
-            <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:12px;">
+            <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:8.6px;">
               <span class="info-badge">i</span>
-              <span style="font-size: 16.8px; opacity:0.75;" id="i18n_inp_prio_hint">Источники проверяются сверху вниз по порядку приоритета (Failover)</span>
+              <span style="font-size: 12.1px; opacity:0.75;" id="i18n_inp_prio_hint">Источники проверяются сверху вниз по порядку приоритета (Failover)</span>
             </div>
 
             <!-- Динамический список URL 1, URL 2... со статусом online, стрелками, Options и корзиной -->
             <div id="sp_inputs_list_box"></div>
 
             <!-- Поле добавления New URL как на скриншоте 2 -->
-            <div style="display:flex; align-items:center; gap:14px; padding:18px 0 10px 88px;">
+            <div style="display:flex; align-items:center; gap:10.1px; padding:13px 0 7.2px 63.4px;">
               <input type="text" id="sp_new_url_inp" class="sp-line-input" placeholder="New URL (http://, https://, hls://, tshttp://, udp://, rtsp://) — нажмите Enter или + Добавить" onkeydown="if(event.key==='Enter'){event.preventDefault();addNewInputUrlRow();}">
               <button class="btn btn-outline btn-sm" onclick="addNewInputUrlRow()">+ Add URL</button>
             </div>
 
             <!-- НАСТРОЙКА USER-AGENT ДЛЯ КАЖДОГО ПОТОКА -->
-            <div style="margin-top:26px; padding:18px 20px; border-radius:14px; border:1.5px solid rgba(59,130,246,0.35); background:rgba(59,130,246,0.05);">
-              <div style="font-size: 19.2px; font-weight:800; margin-bottom:12px; display:flex; align-items:center; gap:8px;">
+            <div style="margin-top:18.7px; padding:13px 14.4px; border-radius:10.1px; border:1.5px solid rgba(59,130,246,0.35); background:rgba(59,130,246,0.05);">
+              <div style="font-size: 13.8px; font-weight:800; margin-bottom:8.6px; display:flex; align-items:center; gap:5.8px;">
                 <span>&#127760; User-Agent (Заголовок подключения к источнику для этого потока)</span>
               </div>
-              <div style="display:grid; grid-template-columns: 1fr 1.6fr; gap:16px; align-items:end;">
+              <div style="display:grid; grid-template-columns: 1fr 1.6fr; gap:11.5px; align-items:end;">
                 <div>
-                  <label style="font-size: 16.2px; opacity:0.75; font-weight:700;">Готовый профиль (Preset)</label>
+                  <label style="font-size: 11.7px; opacity:0.75; font-weight:700;">Готовый профиль (Preset)</label>
                   <select id="f_ua_preset" class="form-input" onchange="applyUaPreset(this.value)">
                     <option value="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36">Chrome 124 (Windows 10) — По умолчанию</option>
                     <option value="VLC/3.0.20 LibVLC/3.0.20">VLC Media Player (3.0.20)</option>
@@ -3080,48 +3082,48 @@ INDEX_HTML = r"""<!DOCTYPE html>
                   </select>
                 </div>
                 <div>
-                  <label style="font-size: 16.2px; opacity:0.75; font-weight:700;">Активный User-Agent потока</label>
+                  <label style="font-size: 11.7px; opacity:0.75; font-weight:700;">Активный User-Agent потока</label>
                   <input type="text" id="f_user_agent" class="form-input" placeholder="Mozilla/5.0 ...">
                 </div>
               </div>
             </div>
 
             <!-- Поля со скриншота 2: Publication, Fallback, Timeouts, DVB Subtitles -->
-            <div style="margin-top:26px;">
-              <div style="font-size: 18.0px; font-weight:700; margin-bottom:8px;">
+            <div style="margin-top:18.7px;">
+              <div style="font-size: 13px; font-weight:700; margin-bottom:5.8px;">
                 Publication <span style="opacity:0.6; font-weight:500;">Allow to publish to the stream</span>
               </div>
-              <div style="display:flex; gap:22px; font-size: 18.0px;">
+              <div style="display:flex; gap:15.8px; font-size: 13px;">
                 <label style="cursor:pointer;"><input type="radio" name="sp_pub" value="enabled"> enabled</label>
                 <label style="cursor:pointer;"><input type="radio" name="sp_pub" value="disabled" checked> disabled</label>
               </div>
             </div>
 
-            <div style="margin-top:24px;">
+            <div style="margin-top:17.3px;">
               <input type="text" id="f_backup" class="sp-line-input" placeholder="Fallback video: if all your sources become dead, an mp4 file on this VOD/path will be played">
             </div>
 
-            <div style="display:grid; grid-template-columns: 1fr 1fr 1fr auto auto; gap:20px; align-items:center; margin-top:24px;">
+            <div style="display:grid; grid-template-columns: 1fr 1fr 1fr auto auto; gap:14.4px; align-items:center; margin-top:17.3px;">
               <div>
-                <label style="font-size: 15.6px; opacity:0.65;">Timeout (sec)</label>
+                <label style="font-size: 11.2px; opacity:0.65;">Timeout (sec)</label>
                 <input type="number" id="f_source_timeout" class="sp-line-input" value="30">
               </div>
               <div>
-                <label style="font-size: 15.6px; opacity:0.65;">On-demand Idle Timeout (sec)</label>
+                <label style="font-size: 11.2px; opacity:0.65;">On-demand Idle Timeout (sec)</label>
                 <input type="number" id="f_clients_timeout" class="sp-line-input" value="45">
               </div>
               <div>
-                <label style="font-size: 15.6px; opacity:0.65;">Audio timeout</label>
+                <label style="font-size: 11.2px; opacity:0.65;">Audio timeout</label>
                 <input type="number" class="sp-line-input" placeholder="auto">
               </div>
-              <label style="font-size: 18.0px; display:flex; align-items:center; gap:6px; cursor:pointer;">
+              <label style="font-size: 13px; display:flex; align-items:center; gap:4.3px; cursor:pointer;">
                 <input type="checkbox" id="sp_chk_dvr_quick" onchange="document.getElementById('f_dvr_hours').value = this.checked ? 24 : 0"> DVR
               </label>
             </div>
 
-            <div style="margin-top:26px;">
-              <div style="font-size: 18.0px; font-weight:700; margin-bottom:8px;">Convert DVB subtitles to WebVTT</div>
-              <div style="display:flex; gap:22px; font-size: 18.0px;">
+            <div style="margin-top:18.7px;">
+              <div style="font-size: 13px; font-weight:700; margin-bottom:5.8px;">Convert DVB subtitles to WebVTT</div>
+              <div style="display:flex; gap:15.8px; font-size: 13px;">
                 <label style="cursor:pointer;"><input type="radio" name="sp_sub" checked> disable</label>
                 <label style="cursor:pointer;"><input type="radio" name="sp_sub"> add</label>
                 <label style="cursor:pointer;"><input type="radio" name="sp_sub"> replace</label>
@@ -3207,10 +3209,10 @@ INDEX_HTML = r"""<!DOCTYPE html>
 
 
 
-            <hr style="margin:22px 0; border:none; border-top:1px solid rgba(148,163,184,0.3);">
+            <hr style="margin:15.8px 0; border:none; border-top:1px solid rgba(148,163,184,0.3);">
             <div class="form-row">
               <label id="i18n_f_push_lbl">Push live video / SRT Server (например: srt://62.60.250.90:54333, udp://..., rtmp://...)</label>
-              <textarea id="f_pushes" class="form-input" style="height:85px; font-family:monospace;" placeholder="srt://62.60.250.90:54333"></textarea>
+              <textarea id="f_pushes" class="form-input" style="height:61.2px; font-family:monospace;" placeholder="srt://62.60.250.90:54333"></textarea>
             </div>
           </div>
         </div>
@@ -3243,7 +3245,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
 
       <!-- Нижняя панель кнопок Delete Stream и Save (как на скриншотах 1, 2, 3) -->
       <div class="sp-footer-bar">
-        <div style="display:flex; gap:12px;">
+        <div style="display:flex; gap:8.6px;">
           <button class="btn-pink-danger" id="btn_modal_delete" onclick="deleteStreamModal()">Delete Stream</button>
           <button class="btn" onclick="saveStreamModal()" id="i18n_save_btn">Save</button>
         </div>
@@ -3253,10 +3255,10 @@ INDEX_HTML = r"""<!DOCTYPE html>
 
     <!-- ==================== 3. PULSE (3 ГРАФИКА В 1 РЯД) ==================== -->
     <div id="sec_pulse" style="display:none;">
-      <div class="glass-panel" style="margin-bottom:18px;">
-        <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px; margin-bottom:8px;">
-          <h3 style="font-size: 26.4px;" id="i18n_pulse_head">Pulse — Мониторинг нагрузки и трафика StreamFlow Aria</h3>
-          <div style="display:flex; gap:18px; font-size: 18.0px; font-weight:700;">
+      <div class="glass-panel" style="margin-bottom:13px;">
+        <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8.6px; margin-bottom:5.8px;">
+          <h3 style="font-size: 19px;" id="i18n_pulse_head">Pulse — Мониторинг нагрузки и трафика StreamFlow Aria</h3>
+          <div style="display:flex; gap:13px; font-size: 13px; font-weight:700;">
             <span>CPU: <b id="pu_cpu" style="color:#3b82f6;">0%</b></span>
             <span>RAM: <b id="pu_ram" style="color:#8b5cf6;">0%</b></span>
             <span>RAM Buffer (/dev/shm): <b id="pu_shm" style="color:#10b981;">0 MB</b></span>
@@ -3272,7 +3274,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
                 <span><i class="leg-dot" style="background:#10b981;"></i><span id="i18n_leg_out">Выход (OUT)</span>: <b id="chart_lbl_out">0.00</b></span>
               </div>
             </div>
-            <canvas id="canvas_net" class="pulse-canvas" height="250"></canvas>
+            <canvas id="canvas_net" class="pulse-canvas" height="180"></canvas>
           </div>
           <div class="glass-panel pulse-chart-card">
             <div class="pulse-chart-head">
@@ -3281,7 +3283,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
                 <span><i class="leg-dot" style="background:#6366f1;"></i>CPU: <b id="chart_lbl_cpu">0%</b></span>
               </div>
             </div>
-            <canvas id="canvas_cpu" class="pulse-canvas" height="250"></canvas>
+            <canvas id="canvas_cpu" class="pulse-canvas" height="180"></canvas>
           </div>
           <div class="glass-panel pulse-chart-card">
             <div class="pulse-chart-head">
@@ -3291,7 +3293,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
                 <span><i class="leg-dot" style="background:#10b981;"></i><span id="i18n_leg_buf">Буфер</span>: <b id="chart_lbl_shm">0 MB</b></span>
               </div>
             </div>
-            <canvas id="canvas_ram" class="pulse-canvas" height="250"></canvas>
+            <canvas id="canvas_ram" class="pulse-canvas" height="180"></canvas>
           </div>
         </div>
       </div>
@@ -3299,7 +3301,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
 
     <div id="sec_sessions" style="display:none;">
       <div class="glass-panel">
-        <h3 style="margin-bottom:16px; font-size: 25.2px;" id="i18n_sess_head">Активные сессии просмотра (Play Sessions)</h3>
+        <h3 style="margin-bottom:11.5px; font-size: 18.1px;" id="i18n_sess_head">Активные сессии просмотра (Play Sessions)</h3>
         <table class="streams-table">
           <thead>
             <tr>
@@ -3315,37 +3317,37 @@ INDEX_HTML = r"""<!DOCTYPE html>
 
     <div id="sec_config" style="display:none;">
 
-      <div class="glass-panel" style="margin-bottom:18px;">
-        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:14px;">
-          <h3 style="font-size: 25.2px;">Listeners & Access (Порты и доступ)</h3>
+      <div class="glass-panel" style="margin-bottom:13px;">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10.1px;">
+          <h3 style="font-size: 18.1px;">Listeners & Access (Порты и доступ)</h3>
           <button class="btn" onclick="saveGuiConf()">Сохранить настройки</button>
         </div>
-        <div style="display:grid; grid-template-columns: 1fr 1fr; gap:20px;">
+        <div style="display:grid; grid-template-columns: 1fr 1fr; gap:14.4px;">
           <div>
-            <label style="font-weight:700;display:block;margin-bottom:8px;">HTTP Port</label>
+            <label style="font-weight:700;display:block;margin-bottom:5.8px;">HTTP Port</label>
             <input type="number" id="gui_port" class="form-input">
           </div>
           <div>
-            <label style="font-weight:700;display:block;margin-bottom:8px;">Admin UI username</label>
-            <input type="text" id="gui_user" class="form-input" style="margin-bottom:12px;">
-            <label style="font-weight:700;display:block;margin-bottom:8px;">Admin UI password</label>
+            <label style="font-weight:700;display:block;margin-bottom:5.8px;">Admin UI username</label>
+            <input type="text" id="gui_user" class="form-input" style="margin-bottom:8.6px;">
+            <label style="font-weight:700;display:block;margin-bottom:5.8px;">Admin UI password</label>
             <input type="password" id="gui_pass" class="form-input" placeholder="(оставьте пустым для сохранения старого)">
           </div>
         </div>
       </div>
       <div class="glass-panel">
-        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:14px;">
-          <h3 style="font-size: 25.2px;">/etc/flustream/flustream.conf</h3>
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10.1px;">
+          <h3 style="font-size: 18.1px;">/etc/flustream/flustream.conf</h3>
           <button class="btn" onclick="saveRawConf()" id="i18n_save_conf">Сохранить и применить</button>
         </div>
-        <textarea id="raw_conf_editor" style="width:100%; height:480px; background:#090d18; color:#60a5fa; font-size: 18.0px; padding:16px; border-radius:12px; border:1px solid rgba(99,102,241,0.35);"></textarea>
+        <textarea id="raw_conf_editor" style="width:100%; height:345.6px; background:#090d18; color:#60a5fa; font-size: 13px; padding:11.5px; border-radius:8.6px; border:1px solid rgba(99,102,241,0.35);"></textarea>
       </div>
     </div>
 
     <div id="sec_iptv" style="display:none;">
       <div class="glass-panel">
-        <h3 style="margin-bottom:16px; font-size: 25.2px;" id="i18n_m3u_head">Генератор плейлистов M3U (StreamFlow Aria)</h3>
-        <div style="display:flex; gap:14px; flex-wrap:wrap;">
+        <h3 style="margin-bottom:11.5px; font-size: 18.1px;" id="i18n_m3u_head">Генератор плейлистов M3U (StreamFlow Aria)</h3>
+        <div style="display:flex; gap:10.1px; flex-wrap:wrap;">
           <a class="btn" href="/playlist.m3u?format=hls" target="_blank" style="text-decoration:none;" id="i18n_dl_hls">Скачать M3U (HLS .m3u8)</a>
           <a class="btn btn-outline" href="/playlist.m3u?format=mpegts" target="_blank" style="text-decoration:none;" id="i18n_dl_ts">Скачать M3U (HTTP MPEG-TS)</a>
           
@@ -3355,16 +3357,16 @@ INDEX_HTML = r"""<!DOCTYPE html>
 
     <div id="sec_cluster" style="display:none;">
       <div class="glass-panel">
-        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:16px; flex-wrap:wrap; gap:10px;">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:11.5px; flex-wrap:wrap; gap:7.2px;">
           <div>
-            <h3 style="font-size: 25.2px;" id="i18n_cl_head">Объединение в кластер (Flussonic &amp; StreamFlow Aria Cluster)</h3>
-            <p style="font-size: 17.4px; opacity:0.8; margin-top:4px;" id="i18n_cl_sub">
+            <h3 style="font-size: 18.1px;" id="i18n_cl_head">Объединение в кластер (Flussonic &amp; StreamFlow Aria Cluster)</h3>
+            <p style="font-size: 12.5px; opacity:0.8; margin-top:2.9px;" id="i18n_cl_sub">
               Подключайте внешние серверы Flussonic или StreamFlow Aria по директивам <code>cluster_key</code>, <code>source</code> и <code>peer</code>
             </p>
           </div>
           <button class="btn" onclick="saveAndSyncCluster()" id="i18n_cl_sync_btn">&#8635; Сохранить и синхронизировать кластер</button>
         </div>
-        <div style="display:grid; grid-template-columns: 1fr 1fr; gap:18px; margin-bottom:18px;">
+        <div style="display:grid; grid-template-columns: 1fr 1fr; gap:13px; margin-bottom:13px;">
           <div class="form-row">
             <label id="i18n_cl_key_lbl">Секретный ключ кластера (cluster_key)</label>
             <input type="text" id="cl_key" class="form-input" value="flustream_secret">
@@ -3376,9 +3378,9 @@ INDEX_HTML = r"""<!DOCTYPE html>
         </div>
         <div class="form-row">
           <label id="i18n_cl_src_lbl">Удаленные серверы-источники — Директива <code>source</code></label>
-          <textarea id="cl_sources_hosts" class="form-input" style="height:80px; font-family:monospace;"></textarea>
+          <textarea id="cl_sources_hosts" class="form-input" style="height:57.6px; font-family:monospace;"></textarea>
         </div>
-        <div style="display:grid; grid-template-columns: 1fr 1fr 1fr; gap:14px; margin-bottom:16px;">
+        <div style="display:grid; grid-template-columns: 1fr 1fr 1fr; gap:10.1px; margin-bottom:11.5px;">
           <div class="form-row">
             <label id="i18n_cl_proto_lbl">Протокол забора потоков</label>
             <select id="cl_proto" class="form-input">
@@ -3397,11 +3399,11 @@ INDEX_HTML = r"""<!DOCTYPE html>
         </div>
         <div class="form-row">
           <label id="i18n_cl_peer_lbl">Соседние узлы пиринга — Директива <code>peer</code></label>
-          <textarea id="cl_peers" class="form-input" style="height:55px; font-family:monospace;"></textarea>
+          <textarea id="cl_peers" class="form-input" style="height:39.6px; font-family:monospace;"></textarea>
         </div>
-        <hr style="margin:20px 0; border:none; border-top:1px solid rgba(148,163,184,0.3);">
-        <h3 style="font-size: 23.4px; margin-bottom:10px;" id="i18n_bulk_head">Быстрый массовый импорт каналов (M3U или список ссылок)</h3>
-        <div style="display:grid; grid-template-columns: 2fr 1fr auto; gap:12px; margin-bottom:12px; align-items:end;">
+        <hr style="margin:14.4px 0; border:none; border-top:1px solid rgba(148,163,184,0.3);">
+        <h3 style="font-size: 16.8px; margin-bottom:7.2px;" id="i18n_bulk_head">Быстрый массовый импорт каналов (M3U или список ссылок)</h3>
+        <div style="display:grid; grid-template-columns: 2fr 1fr auto; gap:8.6px; margin-bottom:8.6px; align-items:end;">
           <div class="form-row" style="margin-bottom:0;">
             <label id="i18n_bulk_url_lbl">Ссылка на M3U / M3U8 плейлист (необязательно)</label>
             <input type="text" id="bulk_m3u_url" class="form-input" placeholder="http://ip:port/playlist.m3u8">
@@ -3417,19 +3419,19 @@ INDEX_HTML = r"""<!DOCTYPE html>
         </div>
         <div class="form-row">
           <label id="i18n_bulk_txt_lbl">Или вставьте список ссылок на потоки / содержимое файла .m3u:</label>
-          <textarea id="bulk_m3u_text" class="form-input" style="height:120px; font-family:monospace;"></textarea>
+          <textarea id="bulk_m3u_text" class="form-input" style="height:86.4px; font-family:monospace;"></textarea>
         </div>
       </div>
     </div>
 
     <div id="sec_tester" style="display:none;">
       <div class="glass-panel">
-        <h3 style="margin-bottom:14px; font-size: 25.2px;" id="i18n_test_head">Встроенный плеер проверки потоков (HLS .m3u8 и MPEG-DASH .mpd)</h3>
-        <div style="display:flex; gap:10px; margin-bottom:16px;">
+        <h3 style="margin-bottom:10.1px; font-size: 18.1px;" id="i18n_test_head">Встроенный плеер проверки потоков (HLS .m3u8 и MPEG-DASH .mpd)</h3>
+        <div style="display:flex; gap:7.2px; margin-bottom:11.5px;">
           <input type="text" id="tester_url" class="form-input" value="https://dash.akamaized.net/akamai/bbb_30fps/bbb_30fps.mpd">
           <button class="btn" onclick="runTesterPlayer()" id="i18n_test_btn">&#9654; Запустить</button>
         </div>
-        <video id="tester_video" controls style="width:100%; max-height:460px; background:#000; border-radius:12px;"></video>
+        <video id="tester_video" controls style="width:100%; max-height:331.2px; background:#000; border-radius:8.6px;"></video>
       </div>
     </div>
   </div>
@@ -3437,17 +3439,17 @@ INDEX_HTML = r"""<!DOCTYPE html>
 
 <!-- БЫСТРЫЙ ПЛЕЕР ИЗ ТАБЛИЦЫ -->
 <div class="modal-backdrop" id="player_modal">
-  <div class="modal-card" style="width:740px;">
+  <div class="modal-card" style="width:532.8px;">
     <div class="modal-head">
       <strong id="play_modal_title">StreamFlow Aria Player</strong>
-      <div style="display:flex; gap:8px; align-items:center;">
+      <div style="display:flex; gap:5.8px; align-items:center;">
         <button class="btn btn-sm" id="pm_btn_hls" onclick="switchPopupProto('hls')">HLS (.m3u8)</button>
         
         <button class="btn btn-outline btn-sm" onclick="closePlayerModal()">&#10005;</button>
       </div>
     </div>
     <div class="modal-body" style="background:#000; padding:0;">
-      <video id="popup_video" controls autoplay style="width:100%; height:420px; display:block;"></video>
+      <video id="popup_video" controls autoplay style="width:100%; height:302.4px; display:block;"></video>
     </div>
   </div>
 </div>
@@ -3970,7 +3972,7 @@ function drawSmoothChart(canvasId, seriesList, maxValFixed, unitSuffix = '') {
 
   ctx.strokeStyle = isDark ? 'rgba(148, 163, 184, 0.16)' : 'rgba(15, 23, 42, 0.08)';
   ctx.fillStyle = isDark ? '#94a3b8' : '#475569';
-  ctx.font = '600 11.5px Inter, sans-serif';
+  ctx.font = '600 8.3px Inter, sans-serif';
   ctx.lineWidth = 1;
   ctx.setLineDash([4, 4]);
   for (let i = 0; i <= 4; i++) {
@@ -4100,7 +4102,7 @@ function renderStreamsTable(fromPoll = false) {
     const activeIdx = s.runtime.active_input_index || 0;
     const activeUrl = s.runtime.active_input || '-';
 
-    let ttHtml = `<div style="display:flex; font-weight:800; opacity:0.6; padding-bottom:8px; border-bottom:1px solid currentColor; margin-bottom:8px; gap:16px;">
+    let ttHtml = `<div style="display:flex; font-weight:800; opacity:0.6; padding-bottom:5.8px; border-bottom:1px solid currentColor; margin-bottom:5.8px; gap:11.5px;">
             <div style="flex:3;">URL</div><div style="flex:1;">Status</div><div style="flex:1;">Track</div><div style="flex:1;">Resolution</div>
           </div>`;
         inputs.forEach((inp, i) => {
@@ -4108,8 +4110,8 @@ function renderStreamsTable(fromPoll = false) {
           let stS = isA ? '<span style="color:#10b981;">&check; Active</span>' : '<span style="color:#94a3b8;">&otimes; Disabled</span>';
           let tv = s.runtime.codecs.split('/')[0] || '-';
           let ta = s.runtime.codecs.split('/')[1] || '-';
-          ttHtml += `<div style="display:flex; align-items:center; padding:8px 0; border-bottom:1px solid rgba(148,163,184,0.15); gap:16px;">
-            <div style="flex:3; font-family:monospace; font-size:0.9em; word-break:break-all;"><span style="background:#94a3b8;color:#fff;border-radius:50%;padding:2px 7px;font-size: 13.2px;margin-right:8px;font-weight:bold;">${i+1}</span>${inp}</div>
+          ttHtml += `<div style="display:flex; align-items:center; padding:5.8px 0; border-bottom:1px solid rgba(148,163,184,0.15); gap:11.5px;">
+            <div style="flex:3; font-family:monospace; font-size:0.9em; word-break:break-all;"><span style="background:#94a3b8;color:#fff;border-radius:50%;padding:2px 5px;font-size: 9.5px;margin-right:5.8px;font-weight:bold;">${i+1}</span>${inp}</div>
             <div style="flex:1; font-weight:700;">${stS}</div>
             <div style="flex:1; font-weight:600; opacity:0.8;">v1<br>a1</div>
             <div style="flex:1; font-weight:700; font-size:0.9em;">${isA ? tv : '-'}</div>
@@ -4161,7 +4163,7 @@ function renderStreamsTable(fromPoll = false) {
           <button class="buf-mode-btn ${bMode !== 'normal' ? 'active' : ''}" onclick="setStreamBufferMode('${s.name}', '30s')">${t('buf_30')}</button>
           <button class="buf-mode-btn ${bMode === 'normal' ? 'active' : ''}" onclick="setStreamBufferMode('${s.name}', 'normal')">${t('buf_norm')}</button>
         </div>
-        ${st === 'Online' ? `<div style="font-size: 15.6px;margin-top:2px;opacity:0.9;">${s.runtime.codecs}</div>` : ''}
+        ${st === 'Online' ? `<div style="font-size: 11.2px;margin-top:2px;opacity:0.9;">${s.runtime.codecs}</div>` : ''}
         ${st === 'Online' ? `<div><span class="buf-pill">${t('buf_label')} ${bufSec}s / ${targetBuf}s</span></div>` : ''}
       </td>
       <td class="muted-cell">${dvrStr}</td>
@@ -4220,8 +4222,8 @@ function openStreamEditor(name) {
     document.getElementById('f_on_play').value = '';
     document.getElementById('f_enabled').checked = true;
     if (document.getElementById('sp_mi_in_box')) {
-      document.getElementById('sp_mi_in_box').innerHTML = '<div style="opacity:0.5;font-size:14.4px;margin-top:8px;">No data</div>';
-      document.getElementById('sp_mi_out_box').innerHTML = '<div style="opacity:0.5;font-size:14.4px;margin-top:8px;">No data</div>';
+      document.getElementById('sp_mi_in_box').innerHTML = '<div style="opacity:0.5;font-size:10.4px;margin-top:5.8px;">No data</div>';
+      document.getElementById('sp_mi_out_box').innerHTML = '<div style="opacity:0.5;font-size:10.4px;margin-top:5.8px;">No data</div>';
     }
     document.getElementById('sp_ov_res').textContent = '-';
     document.getElementById('sp_ov_br').textContent = '0 kbit/s';
@@ -4297,7 +4299,7 @@ function renderInputsListRows() {
   const isOnline = (s && s.runtime && s.runtime.status === 'Online');
 
   if (!EDIT_INPUTS_ARR.length) {
-    box.innerHTML = `<div style="padding:14px 0; opacity:0.6;">Нет добавленных источников. Введите ссылку в поле New URL ниже.</div>`;
+    box.innerHTML = `<div style="padding:10.1px 0; opacity:0.6;">Нет добавленных источников. Введите ссылку в поле New URL ниже.</div>`;
     return;
   }
 
@@ -4312,7 +4314,7 @@ function renderInputsListRows() {
         <button class="arr-btn" onclick="moveInputUrl(${idx}, 1)" title="Down">&#9660;</button>
       </div>
       <div style="flex:1;">
-        <div style="font-size: 14.4px; opacity:0.6; font-weight:700;">URL ${idx + 1}</div>
+        <div style="font-size: 10.4px; opacity:0.6; font-weight:700;">URL ${idx + 1}</div>
         <input type="text" class="sp-line-input" value="${url.replace(/"/g, '&quot;')}" oninput="EDIT_INPUTS_ARR[${idx}] = this.value">
       </div>
       <a class="more-link" style="text-decoration:none;" onclick="document.getElementById('f_user_agent').focus()">Options</a>
@@ -4412,8 +4414,8 @@ function updateStreamPageLiveStats() {
   const outBox = document.getElementById('sp_mi_out_box');
   if (inBox && outBox) {
     if (st !== 'Online' || !codecs || codecs.includes('Pass-through')) {
-        inBox.innerHTML = '<div style="opacity:0.5;font-size:14.4px;margin-top:8px;">No data</div>';
-        outBox.innerHTML = '<div style="opacity:0.5;font-size:14.4px;margin-top:8px;">No data</div>';
+        inBox.innerHTML = '<div style="opacity:0.5;font-size:10.4px;margin-top:5.8px;">No data</div>';
+        outBox.innerHTML = '<div style="opacity:0.5;font-size:10.4px;margin-top:5.8px;">No data</div>';
     } else {
         const parts = codecs.split('/').map(x => x.trim()).filter(Boolean);
         let inHtml = '', outHtml = '';
@@ -4421,12 +4423,12 @@ function updateStreamPageLiveStats() {
         parts.forEach(p => {
             let lower = p.toLowerCase();
             if (lower.match(/\d+x\d+/)) {
-                inHtml += `<span class="mi-track-v" style="margin-bottom:6px;">v${vIdx} ${lower}</span>`;
-                outHtml += `<span class="mi-track-v" style="margin-bottom:6px;">v${vIdx} ${lower} (Copy)</span>`;
+                inHtml += `<span class="mi-track-v" style="margin-bottom:4.3px;">v${vIdx} ${lower}</span>`;
+                outHtml += `<span class="mi-track-v" style="margin-bottom:4.3px;">v${vIdx} ${lower} (Copy)</span>`;
                 vIdx++;
             } else {
-                inHtml += `<span class="mi-track-a" style="margin-bottom:6px;">a${aIdx} ${lower}</span>`;
-                outHtml += `<span class="mi-track-a" style="margin-bottom:6px;">a${aIdx} ${lower} (-c copy)</span>`;
+                inHtml += `<span class="mi-track-a" style="margin-bottom:4.3px;">a${aIdx} ${lower}</span>`;
+                outHtml += `<span class="mi-track-a" style="margin-bottom:4.3px;">a${aIdx} ${lower} (-c copy)</span>`;
                 aIdx++;
             }
         });
