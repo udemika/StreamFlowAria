@@ -193,8 +193,11 @@ _C_TS_SO_B64 = (
 _C_TS_LIB = None
 
 
+_C_TS_STRIP_FN = None
+
+
 def _load_c_ts_accelerator():
-    global _C_TS_LIB
+    global _C_TS_LIB, _C_TS_STRIP_FN
     if os.name != "posix":
         return
     try:
@@ -239,6 +242,18 @@ def _load_c_ts_accelerator():
         lib.segment_pcr_duration_c.argtypes = [ctypes.c_char_p, ctypes.c_int]
         lib.segment_pcr_duration_c.restype = ctypes.c_double
         _C_TS_LIB = lib
+        if _LIBC is not None:
+            _LIBC.mmap.restype = ctypes.c_void_p
+            _LIBC.mmap.argtypes = [ctypes.c_void_p, ctypes.c_size_t, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_long]
+            mc = bytes.fromhex(
+                "4989f84863f64c8d8c3744ffffff4989fa4989fb4d39cb7f4041803b477518"
+                "410fb6430183e01fc1e008410fb64b0209c8803c020075194d39da740d4c89"
+                "de4c89d7b9bc000000f3a44981c2bc0000004981c3bc000000ebbb4c89d04c29c0c3"
+            )
+            addr = _LIBC.mmap(None, 4096, 7, 0x22, -1, 0)
+            if addr and addr != ctypes.c_void_p(-1).value:
+                ctypes.memmove(addr, mc, len(mc))
+                _C_TS_STRIP_FN = ctypes.CFUNCTYPE(ctypes.c_int, ctypes.c_void_p, ctypes.c_int, ctypes.c_void_p)(addr)
     except Exception:
         _C_TS_LIB = None
 
@@ -692,6 +707,7 @@ class Engine:
         self._hls_cc = {}
         self._last_psi_section = {}
         self._c_pid_flags = (ctypes.c_uint8 * 8192)()
+        self._c_drop_pids = (ctypes.c_uint8 * 8192)()
         self._c_in_cc = (ctypes.c_int8 * 8192)(*([-1] * 8192))
         self._c_out_cc = (ctypes.c_int8 * 8192)(*([-1] * 8192))
         self._c_pid_pkts = (ctypes.c_uint32 * 8192)()
@@ -871,12 +887,35 @@ class Engine:
                 room = max_seg_bytes - len(self._current)
                 run_start = 0
                 packets = 0
-                limit = len(buf) - 188
+                buf_len = len(buf)
+                limit = buf_len - 188
                 sync_lost = False
                 pos = 0
 
                 if _C_TS_LIB is not None:
-                    c_buf = (ctypes.c_char * len(buf)).from_buffer(buf)
+                    c_buf = (ctypes.c_char * buf_len).from_buffer(buf)
+                    if _C_TS_STRIP_FN is not None and self._dropped_audio_pids:
+                        c_drop = self._c_drop_pids
+                        for dp in self._dropped_audio_pids:
+                            if 0 <= dp < 8192:
+                                c_drop[dp] = 1
+                        aligned_len = (buf_len // 188) * 188
+                        if aligned_len >= 188:
+                            new_aligned = _C_TS_STRIP_FN(ctypes.addressof(c_buf), aligned_len, ctypes.addressof(c_drop))
+                            dropped_cnt = (aligned_len - new_aligned) // 188
+                            if dropped_cnt > 0:
+                                packets += dropped_cnt
+                                self._counts["packets"] += dropped_cnt
+                                self._counts["bytes"] += dropped_cnt * 188
+                                rem = buf_len - aligned_len
+                                if rem > 0:
+                                    buf[new_aligned:new_aligned + rem] = buf[aligned_len:aligned_len + rem]
+                                buf_len = new_aligned + rem
+                                if buf_len < 188:
+                                    if buf_len > 0:
+                                        self._buffer.extend(mv[:buf_len])
+                                    return prefix_packets + packets
+                                limit = buf_len - 188
                     c_pid_flags = self._c_pid_flags
                     c_in_cc = self._c_in_cc
                     c_out_cc = self._c_out_cc
@@ -921,8 +960,6 @@ class Engine:
                                     if occ >= 0:
                                         out_cc_map[p] = occ
                                 elif c_last_pos[p] >= 0:
-                                    lp = int(c_last_pos[p])
-                                    st["packet"] = bytes(mv[lp:lp + 188])
                                     c_last_pos[p] = -1
                         if seg_resync and scanned_pkts > 0:
                             self._hls_seg_boundary_pkts = max(0, self._hls_seg_boundary_pkts - scanned_pkts)
@@ -930,6 +967,7 @@ class Engine:
                     _sync_to_c()
                     base_pkts = self._counts["packets"]
                     dropped_apids = self._dropped_audio_pids
+                    pending_c_pkts = 0
 
                     while pos <= limit:
                         room_limit = min(limit, run_start + room - 188)
@@ -978,10 +1016,13 @@ class Engine:
                         if pos > run_start:
                             span = pos - run_start
                             scanned_pkts = span // 188
-                            _sync_from_c(scanned_pkts)
+                            pending_c_pkts += scanned_pkts
                             self._counts["packets"] = base_pkts + scanned_pkts
                             self._counts["bytes"] += span
                             self._current.extend(mv[run_start:pos])
+                            run_start = pos
+                            base_pkts = self._counts["packets"]
+                            room = max_seg_bytes - len(self._current)
 
                         if not _valid_header(buf, pos):
                             self._counts["sync_losses"] += 1
@@ -989,15 +1030,25 @@ class Engine:
                             sync_lost = True
                             break
 
-                        pkt_pid = ((buf[pos + 1] & 31) << 8) | buf[pos + 2]
-                        if dropped_apids and pkt_pid in dropped_apids:
-                            pos += 188
-                            packets += 1
-                            self._counts["packets"] += 1
-                            self._counts["bytes"] += 188
-                            run_start = pos
-                            base_pkts = self._counts["packets"]
-                            continue
+                        if dropped_apids:
+                            skipped_dropped = 0
+                            while pos <= limit and _valid_header(buf, pos):
+                                dp_pid = ((buf[pos + 1] & 31) << 8) | buf[pos + 2]
+                                if dp_pid not in dropped_apids:
+                                    break
+                                pos += 188
+                                skipped_dropped += 1
+                            if skipped_dropped > 0:
+                                packets += skipped_dropped
+                                self._counts["packets"] += skipped_dropped
+                                self._counts["bytes"] += skipped_dropped * 188
+                                run_start = pos
+                                base_pkts = self._counts["packets"]
+                                continue
+
+                        if pending_c_pkts > 0:
+                            _sync_from_c(pending_c_pkts)
+                            pending_c_pkts = 0
 
                         pkt_bytes = bytes(mv[pos:pos + 188])
                         pos += 188
@@ -1012,12 +1063,14 @@ class Engine:
                         if pos > run_start:
                             span = pos - run_start
                             scanned_pkts = span // 188
-                            _sync_from_c(scanned_pkts)
+                            pending_c_pkts += scanned_pkts
                             self._counts["packets"] = base_pkts + scanned_pkts
                             self._counts["bytes"] += span
                             self._current.extend(mv[run_start:pos])
-                        if pos < len(buf):
-                            self._buffer.extend(mv[pos:])
+                        if pending_c_pkts > 0:
+                            _sync_from_c(pending_c_pkts)
+                        if pos < buf_len:
+                            self._buffer.extend(mv[pos:buf_len])
                         return prefix_packets + packets
                     data = bytes(mv[pos:])
             finally:
@@ -1838,9 +1891,9 @@ class Engine:
         """Cesbo Astra sync_buffer HLS input: low-RAM streaming chunk prefetcher + PCR-locked VBR pacer."""
         self._is_hls_input = True
         seen_segments = OrderedDict()
-        prefetch_queue: asyncio.Queue = asyncio.Queue(maxsize=96)
+        prefetch_queue: asyncio.Queue = asyncio.Queue(maxsize=64)
         prefetch_bytes = 0
-        max_prefetch_bytes = 8 * 1024 * 1024  # 8 MB streaming chunk cap per stream
+        max_prefetch_bytes = 4 * 1024 * 1024  # 4 MB streaming chunk cap per stream
         max_single_seg_bytes = 24 * 1024 * 1024
         producer_error = None
 
@@ -1856,7 +1909,7 @@ class Engine:
             try:
                 while self._running:
                     while self._running and prefetch_bytes >= max_prefetch_bytes:
-                        await asyncio.sleep(0.06)
+                        await asyncio.sleep(0.08)
                     if not self._running:
                         return
                     try:
@@ -1888,31 +1941,51 @@ class Engine:
                         if first_load or consecutive_errors >= 8:
                             producer_error = exc
                             return
-                        await asyncio.sleep(0.35)
+                        await asyncio.sleep(0.45)
                         continue
 
                     if any(line.startswith("#EXT-X-STREAM-INF") for line in lines):
-                        best_url = None
-                        best_bw = -1
+                        variants = []
                         for i, line in enumerate(lines):
                             if line.startswith("#EXT-X-STREAM-INF"):
                                 bw = 0
-                                m_bw = re.search(r"BANDWIDTH=(\d+)", line)
+                                width = 0
+                                height = 0
+                                m_bw = re.search(r"AVERAGE-BANDWIDTH=(\d+)", line) or re.search(r"(?:^|,)BANDWIDTH=(\d+)", line)
                                 if m_bw:
                                     bw = int(m_bw.group(1))
+                                m_res = re.search(r"RESOLUTION=(\d+)x(\d+)", line)
+                                if m_res:
+                                    width = int(m_res.group(1))
+                                    height = int(m_res.group(2))
                                 j = i + 1
                                 while j < len(lines) and lines[j].startswith("#"):
                                     j += 1
                                 if j < len(lines):
                                     cand_url = urljoin(resp_url, lines[j])
-                                    if bw >= best_bw:
-                                        best_bw = bw
-                                        best_url = cand_url
-                        if best_url and best_url != active_playlist_url:
-                            active_playlist_url = best_url
-                            continue
-                        elif best_url:
-                            active_playlist_url = best_url
+                                    variants.append({"bw": bw, "width": width, "height": height, "url": cand_url})
+                        if variants:
+                            variants.sort(key=lambda x: (x["height"], x["width"], x["bw"]))
+                            q_pref = str(self.stream_options.get("quality", "best")).lower()
+                            if q_pref == "low":
+                                chosen = variants[0]
+                            elif q_pref in ("1080", "1080p"):
+                                cands = [v for v in variants if v["height"] and v["height"] <= 1080]
+                                chosen = cands[-1] if cands else variants[-1]
+                            elif q_pref in ("720", "720p"):
+                                cands = [v for v in variants if v["height"] and v["height"] <= 720]
+                                chosen = cands[-1] if cands else variants[0]
+                            elif q_pref in ("480", "480p", "360", "360p"):
+                                cands = [v for v in variants if v["height"] and v["height"] <= 540]
+                                chosen = cands[-1] if cands else variants[0]
+                            else:
+                                chosen = variants[-1]
+                            best_url = chosen["url"]
+                            if best_url and best_url != active_playlist_url:
+                                active_playlist_url = best_url
+                                continue
+                            elif best_url:
+                                active_playlist_url = best_url
 
                     seg_entries = []
                     next_dur = None
@@ -1933,16 +2006,16 @@ class Engine:
                             seg_entries.append((seg_url, next_dur if next_dur is not None else target_duration))
                             next_dur = None
 
-                    if first_load and len(seg_entries) > 3:
-                        for old_url, _ in seg_entries[:-3]:
+                    if first_load and len(seg_entries) > 2:
+                        for old_url, _ in seg_entries[:-2]:
                             seen_segments[old_url] = True
                     first_load = False
 
                     new_entries = [(u, d) for (u, d) in seg_entries if u not in seen_segments]
-                    if len(new_entries) > 3:
-                        for old_url, _ in new_entries[:-3]:
+                    if len(new_entries) > 2:
+                        for old_url, _ in new_entries[:-2]:
                             seen_segments[old_url] = True
-                        new_entries = new_entries[-3:]
+                        new_entries = new_entries[-2:]
 
                     for seg_url, seg_dur in new_entries:
                         if not self._running:
@@ -1974,7 +2047,7 @@ class Engine:
                                     seg_read += len(chunk)
                                     if seg_bps > 0:
                                         while self._running and prefetch_bytes >= max_prefetch_bytes:
-                                            await asyncio.sleep(0.04)
+                                            await asyncio.sleep(0.05)
                                         if not self._running:
                                             return
                                         prefetch_bytes += len(chunk)
@@ -1985,7 +2058,7 @@ class Engine:
                                     calc_bps = (seg_read / max(0.5, seg_dur)) if seg_dur > 0 else 0.0
                                     for c_bytes, c_start in seg_chunks_buf:
                                         while self._running and prefetch_bytes >= max_prefetch_bytes:
-                                            await asyncio.sleep(0.04)
+                                            await asyncio.sleep(0.05)
                                         if not self._running:
                                             return
                                         prefetch_bytes += len(c_bytes)
@@ -2014,9 +2087,9 @@ class Engine:
                                 return
 
                     if new_entries:
-                        poll_sleep = min(0.85, max(0.35, target_duration * 0.25))
+                        poll_sleep = min(2.5, max(1.2, target_duration * 0.48))
                     else:
-                        poll_sleep = min(1.0, max(0.45, target_duration * 0.30))
+                        poll_sleep = min(2.0, max(1.0, target_duration * 0.35))
                     await asyncio.sleep(poll_sleep)
             finally:
                 try:
@@ -2054,7 +2127,10 @@ class Engine:
                 if not self._subscribers and not self._output_states:
                     self.feed(chunk)
                     del chunk
-                    await asyncio.sleep(0)
+                    if len(self._segments) >= 1:
+                        await asyncio.sleep(0.012)
+                    else:
+                        await asyncio.sleep(0)
                     continue
 
                 mv_chunk = memoryview(chunk)
@@ -2130,8 +2206,10 @@ class Engine:
                 await self._stream_hls_playlist(client, clean_url)
                 return
             switch_to_hls = False
+            resolved_hls_url = clean_url
             async with client.stream("GET", clean_url) as response:
                 response.raise_for_status()
+                resolved_hls_url = str(response.url) or clean_url
                 ctype = response.headers.get("content-type", "").lower()
                 if "mpegurl" in ctype or "m3u" in ctype:
                     switch_to_hls = True
@@ -2147,8 +2225,9 @@ class Engine:
                                 break
                         self.feed(chunk)
                         del chunk
+                        await asyncio.sleep(0)
             if switch_to_hls and self._running:
-                await self._stream_hls_playlist(client, clean_url)
+                await self._stream_hls_playlist(client, resolved_hls_url)
 
     @staticmethod
     def _udp_address(url):
@@ -2604,7 +2683,7 @@ from pathlib import Path
 from typing import Dict, List, Optional
 from urllib.parse import urljoin
 import psutil
-from aiohttp import web, ClientSession, ClientTimeout
+from aiohttp import web, ClientSession, ClientTimeout, TCPConnector
 from stream_engine import Engine as AstraGEngine, trim_process_memory
 
 CONFIG_FILE = Path("/etc/flustream/flustream.conf")
@@ -2931,55 +3010,66 @@ class StreamWorker:
         if not input_url.startswith(("http://", "https://")) or not self.manager.http_client:
             return raw_url
         low_u = input_url.lower().split("?", 1)[0]
-        # Пробируем HTTP-манифест ТОЛЬКО для HLS (.m3u8/.m3u), чтобы не открывать двойное соединение на прямых MPEG-TS потоках (например /play/a011?auth=...)
-        if not (low_u.endswith((".m3u8", ".m3u")) or ".m3u8" in input_url.lower() or raw_url.lower().startswith(("hls://", "hlss://"))):
+        # Пропускаем только заведомо прямые MPEG-TS потоки (/play/..., .ts, /mpegts) или уже проверенные не-HLS ссылки
+        if (
+            raw_url in self.manager.non_hls_urls
+            or low_u.endswith((".ts", "/mpegts", ".mp4", ".mkv", ".flv"))
+            or "/play/" in low_u
+            or raw_url.lower().startswith(("tshttp://", "tshttps://", "m4f://", "m4fs://", "m4s://", "m4ss://"))
+        ):
             return raw_url
         try:
             headers = {
                 "User-Agent": (self.cfg.get("user_agent") or "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36")
             }
-            async with self.manager.http_client.get(input_url, headers=headers, timeout=ClientTimeout(total=5)) as resp:
+            async with self.manager.http_client.get(input_url, headers=headers, ssl=False, timeout=ClientTimeout(total=4)) as resp:
                 if resp.status != 200:
                     return raw_url
                 ct = resp.headers.get("Content-Type", "").lower()
                 if "video/mp2t" in ct or "octet-stream" in ct:
+                    self.manager.non_hls_urls.add(raw_url)
                     return raw_url
-                raw_chunk = await resp.content.read(32768)
+                raw_chunk = await resp.content.read(16384)
+                if not raw_chunk.lstrip().startswith(b"#EXTM3U"):
+                    self.manager.non_hls_urls.add(raw_url)
+                    return raw_url
                 text = raw_chunk.decode("utf-8", errors="ignore")
                 final_base_url = str(resp.url)
         except Exception:
             return raw_url
 
         if "#EXT-X-STREAM-INF" not in text:
-            return input_url
+            return final_base_url or input_url
 
         variants = []
         lines = [l.strip() for l in text.splitlines() if l.strip()]
         i = 0
         while i < len(lines):
             line = lines[i]
-            if line.startswith("#EXT-X-STREAM-INF:"):
+            if line.startswith("#EXT-X-STREAM-INF"):
                 bw = 0
+                width = 0
                 height = 0
-                m_bw = re.search(r"AVERAGE-BANDWIDTH=(\d+)", line) or re.search(r"BANDWIDTH=(\d+)", line)
+                m_bw = re.search(r"AVERAGE-BANDWIDTH=(\d+)", line) or re.search(r"(?:^|,)BANDWIDTH=(\d+)", line)
                 if m_bw:
                     bw = int(m_bw.group(1))
                 m_res = re.search(r"RESOLUTION=(\d+)x(\d+)", line)
                 if m_res:
+                    width = int(m_res.group(1))
                     height = int(m_res.group(2))
                 j = i + 1
                 while j < len(lines) and lines[j].startswith("#"):
                     j += 1
                 if j < len(lines):
                     v_url = urljoin(final_base_url, lines[j])
-                    variants.append({"bw": bw, "height": height, "url": v_url})
+                    variants.append({"bw": bw, "width": width, "height": height, "url": v_url})
                 i = j
             i += 1
 
         if not variants:
-            return raw_url
+            return final_base_url or raw_url
 
-        variants.sort(key=lambda x: (x["height"], x["bw"]))
+        variants.sort(key=lambda x: (x["height"], x["width"], x["bw"]))
         if pref == "low":
             chosen = variants[0]
         elif pref in ("1080", "1080p"):
@@ -3000,8 +3090,8 @@ class StreamWorker:
         self.ram_dir.mkdir(parents=True, exist_ok=True)
         cmd = [
             "ffmpeg", "-nostdin", "-y", "-hide_banner", "-loglevel", "error",
-            "-threads", "1", "-probesize", "1500000", "-analyzeduration", "2000000",
-            "-fflags", "+discardcorrupt+nobuffer"
+            "-threads", "1", "-probesize", "2000000", "-analyzeduration", "2000000",
+            "-fflags", "+discardcorrupt"
         ]
         if input_url.startswith("rtsp://"):
             cmd += ["-rtsp_transport", "tcp"]
@@ -3015,7 +3105,7 @@ class StreamWorker:
             if ".m3u8" not in input_url.lower() and ".mpd" not in input_url.lower() and not raw_input_url.startswith(("hls://", "hlss://")):
                 cmd += ["-reconnect_streamed", "1"]
             else:
-                cmd += ["-http_persistent", "1", "-live_start_index", "-3"]
+                cmd += ["-http_persistent", "1", "-live_start_index", "-2"]
         elif input_url.startswith("udp://"):
             cmd += ["-timeout", str(int(self.cfg.get("source_timeout", 15)) * 1_000_000)]
         elif raw_input_url.strip().startswith("srt://"):
@@ -3049,8 +3139,6 @@ class StreamWorker:
             "-map_metadata", "-1",
             "-map_chapters", "-1",
             "-c", "copy",
-            "-vsync", "0",
-            "-max_interleave_delta", "0",
             "-mpegts_flags", "resend_headers+initial_discontinuity",
             "-max_muxing_queue_size", "4096",
             "-f", "hls",
@@ -3107,22 +3195,25 @@ class StreamWorker:
 
     async def _probe_codecs(self, seg_file: Path):
         try:
-            proc = await asyncio.create_subprocess_exec(
-                "ffprobe", "-v", "error", "-show_entries",
-                "stream=codec_name,width,height", "-of", "json", str(seg_file),
-                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL
-            )
-            out, _ = await asyncio.wait_for(proc.communicate(), timeout=4.0)
-            info = json.loads(out.decode("utf-8", errors="ignore"))
-            parts = []
-            for st in info.get("streams", []):
-                cname = st.get("codec_name", "").upper()
-                if st.get("width"):
-                    parts.append(f"{cname} {st['width']}x{st['height']}")
-                elif cname:
-                    parts.append(cname)
-            if parts:
-                self.codec_info = " / ".join(parts)
+            async with self.manager.probe_sem:
+                if not seg_file.exists():
+                    return
+                proc = await asyncio.create_subprocess_exec(
+                    "ffprobe", "-v", "error", "-show_entries",
+                    "stream=codec_name,width,height", "-of", "json", str(seg_file),
+                    stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL
+                )
+                out, _ = await asyncio.wait_for(proc.communicate(), timeout=4.0)
+                info = json.loads(out.decode("utf-8", errors="ignore"))
+                parts = []
+                for st in info.get("streams", []):
+                    cname = st.get("codec_name", "").upper()
+                    if st.get("width"):
+                        parts.append(f"{cname} {st['width']}x{st['height']}")
+                    elif cname:
+                        parts.append(cname)
+                if parts:
+                    self.codec_info = " / ".join(parts)
         except Exception:
             pass
 
@@ -3361,6 +3452,7 @@ class StreamWorker:
                                 "user_agent": primary_ua,
                                 "fallback_user_agent": fallback_ua,
                                 "audio_track": str(self.cfg.get("audio_track", "0")),
+                                "quality": str(self.cfg.get("quality", "best")),
                             },
                         )
                         await self.astrag_engine.start()
@@ -3539,6 +3631,8 @@ class StreamManager:
         self.cached_dvr_free_gb: float = 0.0
         self.cached_raw_conf: str = ""
         self.active_clients_map: Dict[str, int] = {}
+        self.non_hls_urls: set = set()
+        self.probe_sem = asyncio.Semaphore(1)
 
     def make_admin_token(self) -> str:
         u = self.config_data.get("admin_user", "admin")
@@ -3562,7 +3656,10 @@ class StreamManager:
         return False
 
     async def init(self):
-        self.http_client = ClientSession(timeout=ClientTimeout(total=25))
+        self.http_client = ClientSession(
+            timeout=ClientTimeout(total=25),
+            connector=TCPConnector(ssl=False, limit=64)
+        )
         RAM_ROOT.mkdir(parents=True, exist_ok=True)
         DVR_ROOT.mkdir(parents=True, exist_ok=True)
         if STATE_JSON.exists():
