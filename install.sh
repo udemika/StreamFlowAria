@@ -117,8 +117,11 @@ PREROLL_MAX_BYTES = 188 * 256  # 48 KB (~256 TS packets) pre-roll burst for inst
 _LIBC = None
 
 
+_LAST_MALLOC_TRIM = 0.0
+
+
 def _configure_libc_allocator():
-    """Configure glibc malloc on Linux so large media buffers use mmap and return to OS immediately."""
+    """Configure glibc malloc on Linux so large media buffers return to OS without excessive mmap churn."""
     global _LIBC
     if os.name != "posix":
         return
@@ -128,9 +131,9 @@ def _configure_libc_allocator():
         if hasattr(libc, "mallopt"):
             libc.mallopt.argtypes = [ctypes.c_int, ctypes.c_int]
             libc.mallopt.restype = ctypes.c_int
-            libc.mallopt(-3, 131072)  # M_MMAP_THRESHOLD = 128 KB (prevents dynamic 32MB heap retention)
-            libc.mallopt(-1, 131072)  # M_TRIM_THRESHOLD = 128 KB
-            libc.mallopt(-8, 2)       # M_ARENA_MAX = 2
+            libc.mallopt(-3, 4 * 1024 * 1024)  # M_MMAP_THRESHOLD = 4 MB (avoids per-segment mmap page faults)
+            libc.mallopt(-1, 2 * 1024 * 1024)  # M_TRIM_THRESHOLD = 2 MB
+            libc.mallopt(-8, 2)                # M_ARENA_MAX = 2
         if hasattr(libc, "malloc_trim"):
             libc.malloc_trim.argtypes = [ctypes.c_size_t]
             libc.malloc_trim.restype = ctypes.c_int
@@ -140,12 +143,16 @@ def _configure_libc_allocator():
 
 
 def trim_process_memory():
-    """Return unused glibc heap pages to the operating system."""
+    """Return unused glibc heap pages to the operating system (rate-limited)."""
+    global _LAST_MALLOC_TRIM
     if _LIBC is not None:
-        try:
-            _LIBC.malloc_trim(0)
-        except Exception:
-            pass
+        now = time.monotonic()
+        if now - _LAST_MALLOC_TRIM >= 30.0:
+            _LAST_MALLOC_TRIM = now
+            try:
+                _LIBC.malloc_trim(0)
+            except Exception:
+                pass
 
 
 _configure_libc_allocator()
@@ -695,6 +702,12 @@ class Engine:
         self._drop_eit = False
         self._drop_sdt = False
         self._filter_keep_pids = None
+        raw_at = self.stream_options.get("audio_track", "0")
+        self._audio_track_sel = str(raw_at).strip().lower() if raw_at is not None else "0"
+        self._audio_tracks_info = []
+        self._video_codec_name = "H264"
+        self._selected_audio_pid = None
+        self._dropped_audio_pids = set()
         self._segments = OrderedDict()
         self._segment_bytes = 0
         self._sequence = 0
@@ -876,8 +889,9 @@ class Engine:
 
                     def _sync_to_c():
                         seg_resync = is_hls and self._hls_seg_boundary_pkts > 0
+                        dropped_apids = self._dropped_audio_pids
                         for p, st in pids.items():
-                            if p != 0x1FFF and p not in psi and st["cc"] is not None:
+                            if p != 0x1FFF and p not in psi and p not in dropped_apids and st["cc"] is not None:
                                 pf = 1
                                 et = elem_pids.get(p)
                                 if et == "AUDIO":
@@ -915,6 +929,7 @@ class Engine:
 
                     _sync_to_c()
                     base_pkts = self._counts["packets"]
+                    dropped_apids = self._dropped_audio_pids
 
                     while pos <= limit:
                         room_limit = min(limit, run_start + room - 188)
@@ -973,6 +988,16 @@ class Engine:
                             self._locked = False
                             sync_lost = True
                             break
+
+                        pkt_pid = ((buf[pos + 1] & 31) << 8) | buf[pos + 2]
+                        if dropped_apids and pkt_pid in dropped_apids:
+                            pos += 188
+                            packets += 1
+                            self._counts["packets"] += 1
+                            self._counts["bytes"] += 188
+                            run_start = pos
+                            base_pkts = self._counts["packets"]
+                            continue
 
                         pkt_bytes = bytes(mv[pos:pos + 188])
                         pos += 188
@@ -1058,6 +1083,8 @@ class Engine:
         if self._hls_seg_boundary_pkts > 0:
             self._hls_seg_boundary_pkts -= 1
         pid = ((packet[1] & 31) << 8) | packet[2]
+        if self._dropped_audio_pids and pid in self._dropped_audio_pids:
+            return
         if self._drop_eit and pid == 0x12:
             return
         if self._drop_sdt and pid == 0x11:
@@ -1158,6 +1185,15 @@ class Engine:
                             if 0xE0 <= stream_id <= 0xEF:
                                 self._elementary_pids[pid] = "VIDEO"
                             elif 0xC0 <= stream_id <= 0xDF or stream_id == 0xBD:
+                                if self._audio_track_sel == "none":
+                                    self._dropped_audio_pids.add(pid)
+                                    return
+                                if self._audio_track_sel != "all":
+                                    if self._selected_audio_pid is None:
+                                        self._selected_audio_pid = pid
+                                    elif pid != self._selected_audio_pid:
+                                        self._dropped_audio_pids.add(pid)
+                                        return
                                 self._elementary_pids[pid] = "AUDIO"
                                 self._has_audio_pid = True
 
@@ -1182,6 +1218,11 @@ class Engine:
         if not tei and not scrambled and not duplicate and payload and pid in self._psi:
             for section, packets in self._psi[pid].push(packet[offset:], pusi, packet):
                 self._cache_table(pid, section, packets)
+            if pid in self._pmt_pids and self._dropped_audio_pids:
+                rw_pkts = self._tables.get((pid, 0))
+                if rw_pkts and len(rw_pkts) == 1:
+                    rw0 = rw_pkts[0]
+                    packet = rw0[:3] + bytes([(rw0[3] & 0xF0) | (packet[3] & 0x0F)]) + rw0[4:]
         if (pcr is not None or discontinuity) and pid != 0x1FFF and not tei and not duplicate:
             self._observe_pcr(pid, pcr, discontinuity)
         self._hls_packet(packet, is_video_keyframe, pid)
@@ -1250,8 +1291,11 @@ class Engine:
         if self._last_psi_section.get(sec_key) == section:
             if table_id in (0, 2):
                 key = (pid, section[6])
-                self._tables[key] = packets
-                self._tables.move_to_end(key)
+                if table_id == 2 and self._dropped_audio_pids and key in self._tables:
+                    self._tables.move_to_end(key)
+                else:
+                    self._tables[key] = packets
+                    self._tables.move_to_end(key)
             return
         if crc32_mpeg(section):
             return
@@ -1350,7 +1394,27 @@ class Engine:
                 prog_descs = _parse_descriptors(section[pos:pos + prog_info_len])
                 pos += prog_info_len
             es_list = []
+            raw_es_entries = []
+            audio_candidates = []
+            video_pid_first = None
+            audio_codec_map = {
+                0x03: "MP2",
+                0x04: "MP2",
+                0x0F: "AAC",
+                0x11: "AAC",
+                0x81: "AC3",
+                0x87: "EAC3",
+                0x06: "AC3",
+            }
+            video_codec_map = {
+                0x01: "MPEG1",
+                0x02: "MPEG2",
+                0x10: "MPEG4",
+                0x1B: "H264",
+                0x24: "HEVC",
+            }
             while pos + 5 <= end:
+                es_start = pos
                 stype = section[pos]
                 epid = ((section[pos + 1] & 0x1F) << 8) | section[pos + 2]
                 es_info_len = ((section[pos + 3] & 0x0F) << 8) | section[pos + 4]
@@ -1359,6 +1423,7 @@ class Engine:
                     break
                 es_descs = _parse_descriptors(section[pos:pos + es_info_len])
                 pos += es_info_len
+                raw_es = section[es_start:pos]
                 tname = STREAM_TYPE_CATEGORIES.get(stype, "DATA")
                 if stype == 0x06:
                     for d in es_descs:
@@ -1368,20 +1433,83 @@ class Engine:
                             tname = "SUB"
                         elif d.get("type_id") == 86:
                             tname = "TTX"
+                if tname == "VIDEO":
+                    if video_pid_first is None:
+                        video_pid_first = epid
+                    self._video_codec_name = video_codec_map.get(stype, "H264")
+                elif tname == "AUDIO":
+                    lang = ""
+                    for d in es_descs:
+                        if d.get("type_id") == 10 and d.get("lang"):
+                            lang = d.get("lang", "")
+                            break
+                    acodec = audio_codec_map.get(stype, "AAC")
+                    audio_candidates.append({
+                        "index": len(audio_candidates),
+                        "pid": epid,
+                        "type_id": stype,
+                        "codec": acodec,
+                        "lang": lang,
+                    })
+                raw_es_entries.append((epid, stype, tname, es_descs, raw_es))
+
+            self._audio_tracks_info = audio_candidates
+            if self._audio_track_sel == "none":
+                self._selected_audio_pid = -1
+                self._dropped_audio_pids = {a["pid"] for a in audio_candidates}
+                self._has_audio_pid = False
+            elif self._audio_track_sel == "all" or not audio_candidates:
+                self._selected_audio_pid = None
+                self._dropped_audio_pids.clear()
+                self._has_audio_pid = bool(audio_candidates)
+            else:
+                sel_idx = int(self._audio_track_sel) if self._audio_track_sel.isdigit() else 0
+                if sel_idx >= len(audio_candidates):
+                    sel_idx = 0
+                chosen_pid = audio_candidates[sel_idx]["pid"]
+                self._selected_audio_pid = chosen_pid
+                self._dropped_audio_pids = {a["pid"] for a in audio_candidates if a["pid"] != chosen_pid}
+                self._has_audio_pid = True
+
+            for dropped_p in self._dropped_audio_pids:
+                self._elementary_pids.pop(dropped_p, None)
+                self._pids.pop(dropped_p, None)
+                self._c_pid_flags[dropped_p] = 0
+
+            kept_es_bytes = bytearray()
+            for epid, stype, tname, es_descs, raw_es in raw_es_entries:
+                if epid in self._dropped_audio_pids:
+                    continue
                 self._elementary_pids[epid] = tname
-                if tname == "AUDIO":
-                    self._has_audio_pid = True
+                kept_es_bytes.extend(raw_es)
                 es_list.append({
                     "pid": epid,
                     "type_id": stype,
                     "type_name": tname,
                     "descriptors": es_descs,
                 })
+
+            out_pcr_pid = pcr_pid
+            if out_pcr_pid in self._dropped_audio_pids:
+                out_pcr_pid = video_pid_first or (self._selected_audio_pid if (self._selected_audio_pid and self._selected_audio_pid > 0) else 0x1FFF)
+                self._pcr_pid = out_pcr_pid if out_pcr_pid != 0x1FFF else None
+
+            if self._dropped_audio_pids and 12 + prog_info_len <= end:
+                pmt_body = (
+                    section[3:8]
+                    + bytes([0xE0 | ((out_pcr_pid >> 8) & 0x1F), out_pcr_pid & 0xFF])
+                    + section[10:12 + prog_info_len]
+                    + bytes(kept_es_bytes)
+                )
+                if len(pmt_body) + 8 <= 184:
+                    pmt_cc = (packets[0][3] & 0x0F) if packets else 0
+                    packets = [build_psi_packet(pid, 0x02, pmt_body, cc=pmt_cc)]
+
             self._parsed_pmts[pnr] = {
                 "psi": "pmt",
                 "pnr": pnr,
                 "pid": pid,
-                "pcr": pcr_pid,
+                "pcr": out_pcr_pid,
                 "descriptors": prog_descs,
                 "streams": es_list,
             }
@@ -1402,6 +1530,8 @@ class Engine:
         pcr_pid = self._pcr_pid or next(iter(self._elementary_pids), 0x1FFF)
         es_bytes = bytearray()
         for epid, tname in sorted(self._elementary_pids.items())[:16]:
+            if epid in self._dropped_audio_pids:
+                continue
             stype = 0x1B if tname == "VIDEO" else (0x0F if tname == "AUDIO" else 0x06)
             es_bytes += bytes([stype, 0xE0 | ((epid >> 8) & 0x1F), epid & 0xFF, 0xF0, 0x00])
         pmt_body = (
@@ -1550,7 +1680,7 @@ class Engine:
         if not self._current:
             return
         duration = max(0.001, self._elapsed_segment())
-        seg_bytes = self._current
+        seg_bytes = bytes(self._current)
         self._current = bytearray()
         segment = Segment(self._sequence, seg_bytes, duration,
                           self._current_discontinuity)
@@ -1684,6 +1814,9 @@ class Engine:
                         self._pat_identity = None
                         self._pmt_pids.clear()
                         self._elementary_pids.clear()
+                        self._audio_tracks_info = []
+                        self._selected_audio_pid = None
+                        self._dropped_audio_pids.clear()
                         self._psi = {0: _PSI(), 0x10: _PSI(), 0x11: _PSI()}
                 try:
                     scheme = urlsplit(url).scheme.lower()
@@ -1880,12 +2013,10 @@ class Engine:
                                 producer_error = exc
                                 return
 
-                    if prefetch_bytes < 512 * 1024:
-                        poll_sleep = 0.18
-                    elif new_entries:
-                        poll_sleep = min(0.65, max(0.25, target_duration * 0.20))
+                    if new_entries:
+                        poll_sleep = min(0.85, max(0.35, target_duration * 0.25))
                     else:
-                        poll_sleep = 0.30
+                        poll_sleep = min(1.0, max(0.45, target_duration * 0.30))
                     await asyncio.sleep(poll_sleep)
             finally:
                 try:
@@ -1921,35 +2052,9 @@ class Engine:
                 eff_bps = seg_bps if seg_bps > 0 else ((self._pcr_bitrate / 8.0) if (self._pcr_bitrate and self._pcr_bitrate > 0) else 0.0)
 
                 if not self._subscribers and not self._output_states:
-                    now = time.monotonic()
-                    if seg_clock is None or now > seg_clock + 0.30:
-                        seg_clock = now
-                    t_pcr_before = self._timeline
                     self.feed(chunk)
                     del chunk
-                    pcr_delta = self._timeline - t_pcr_before
-                    if 0.0 < pcr_delta <= 1.50:
-                        slice_dur = pcr_delta
-                    elif eff_bps > 0:
-                        slice_dur = chunk_len / eff_bps
-                    else:
-                        slice_dur = 0.02
-                    if prefetch_bytes > 3072 * 1024:
-                        pace_factor = 0.92
-                    elif prefetch_bytes > 2048 * 1024:
-                        pace_factor = 0.97
-                    elif prefetch_bytes >= 384 * 1024:
-                        pace_factor = 0.998
-                    else:
-                        pace_factor = 1.02
-                    seg_clock += slice_dur * pace_factor
-                    wait = seg_clock - time.monotonic()
-                    if wait > 0.004:
-                        await asyncio.sleep(wait)
-                    else:
-                        if wait < -0.30:
-                            seg_clock = time.monotonic() - 0.10
-                        await asyncio.sleep(0)
+                    await asyncio.sleep(0)
                     continue
 
                 mv_chunk = memoryview(chunk)
@@ -2031,90 +2136,17 @@ class Engine:
                 if "mpegurl" in ctype or "m3u" in ctype:
                     switch_to_hls = True
                 else:
-                    raw_queue: asyncio.Queue = asyncio.Queue(maxsize=32)
-                    queued_bytes = 0
-                    max_ts_queue_bytes = 2 * 1024 * 1024
-                    reader_error = None
-
-                    async def _ts_reader():
-                        nonlocal switch_to_hls, queued_bytes, reader_error
-                        first_chunk = True
-                        try:
-                            async for chunk in response.aiter_bytes(65424):
-                                if not self._running or not chunk:
-                                    break
-                                if first_chunk:
-                                    first_chunk = False
-                                    if chunk.lstrip().startswith(b"#EXTM3U"):
-                                        switch_to_hls = True
-                                        break
-                                while self._running and queued_bytes >= max_ts_queue_bytes:
-                                    await asyncio.sleep(0.02)
-                                queued_bytes += len(chunk)
-                                await raw_queue.put(chunk)
-                        except asyncio.CancelledError:
-                            raise
-                        except Exception as exc:
-                            reader_error = exc
-                        finally:
-                            try:
-                                raw_queue.put_nowait(None)
-                            except asyncio.QueueFull:
-                                pass
-
-                    reader_task = asyncio.create_task(_ts_reader())
-                    slice_size = 188 * 174
-                    ts_clock = time.monotonic()
-                    try:
-                        while self._running:
-                            chunk = await raw_queue.get()
-                            if chunk is None:
+                    first_chunk = True
+                    async for chunk in response.aiter_bytes(65424):
+                        if not self._running or not chunk:
+                            break
+                        if first_chunk:
+                            first_chunk = False
+                            if chunk.lstrip().startswith(b"#EXTM3U"):
+                                switch_to_hls = True
                                 break
-                            queued_bytes = max(0, queued_bytes - len(chunk))
-                            if queued_bytes <= 65536 and len(chunk) <= 65536:
-                                self.feed(chunk)
-                                del chunk
-                                ts_clock = time.monotonic()
-                                await asyncio.sleep(0)
-                            else:
-                                # Smooth bursty HTTP .ts upstream sources using 27MHz PCR deltas
-                                mv_chunk = memoryview(chunk)
-                                try:
-                                    pos = 0
-                                    total = len(chunk)
-                                    now = time.monotonic()
-                                    if now > ts_clock + 0.05:
-                                        ts_clock = now
-                                    while pos < total and self._running:
-                                        step = min(slice_size, total - pos)
-                                        t_pcr0 = self._timeline
-                                        self.feed(mv_chunk[pos:pos + step])
-                                        pos += step
-                                        pcr_delta = self._timeline - t_pcr0
-                                        rem_buffered = queued_bytes + (total - pos)
-                                        if rem_buffered > 32768 and 0.0 < pcr_delta <= 0.30:
-                                            factor = 0.85 if rem_buffered > 512 * 1024 else 0.96
-                                            ts_clock += pcr_delta * factor
-                                            wait = ts_clock - time.monotonic()
-                                            if wait > 0.002:
-                                                await asyncio.sleep(wait)
-                                            else:
-                                                if wait < -0.20:
-                                                    ts_clock = time.monotonic() - 0.20
-                                                await asyncio.sleep(0)
-                                        else:
-                                            await asyncio.sleep(0)
-                                finally:
-                                    mv_chunk.release()
-                                    del chunk
-                        if reader_error is not None:
-                            raise reader_error
-                    finally:
-                        reader_task.cancel()
-                        await asyncio.gather(reader_task, return_exceptions=True)
-                        while not raw_queue.empty():
-                            raw_queue.get_nowait()
-                        trim_process_memory()
+                        self.feed(chunk)
+                        del chunk
             if switch_to_hls and self._running:
                 await self._stream_hls_playlist(client, clean_url)
 
@@ -2338,14 +2370,43 @@ class _AsyncHttpResponse:
             if rem == 0:
                 self._reusable = can_keepalive
         else:
+            pend = bytearray()
+            min_batch = 188 * 87  # 16,356 bytes (~87 TS packets) to minimize event-loop wakeups
+            first_yield = True
             while True:
                 if rbuf:
                     data = await reader.read(chunk_size)
                 else:
                     data = await asyncio.wait_for(reader.read(chunk_size), timeout=timeout)
                 if not data:
+                    if pend:
+                        yield pend
                     break
-                yield bytearray(data)
+                pend.extend(data)
+                if first_yield and pend.lstrip().startswith(b"#EXTM3U"):
+                    first_yield = False
+                    yield pend
+                    pend = bytearray()
+                    continue
+                while len(pend) < min_batch and rbuf:
+                    more = await reader.read(chunk_size - len(pend))
+                    if not more:
+                        break
+                    pend.extend(more)
+                if len(pend) >= min_batch or reader.at_eof():
+                    first_yield = False
+                    aligned = (len(pend) // 188) * 188
+                    if aligned > 0:
+                        if aligned == len(pend):
+                            yield pend
+                            pend = bytearray()
+                        else:
+                            out = bytearray(pend[:aligned])
+                            del pend[:aligned]
+                            yield out
+                    elif reader.at_eof() and pend:
+                        yield pend
+                        pend = bytearray()
 
     async def aclose(self):
         if self._closed:
@@ -2621,6 +2682,7 @@ def generate_flustream_conf(data: dict) -> str:
         lines.append(f"  buffer_mode {s.get('buffer_mode', '30s')};")
         lines.append(f"  quality {s.get('quality', 'best')};")
         lines.append(f"  engine {s.get('engine', 'ffmpeg')};")
+        lines.append(f"  audio_track {s.get('audio_track', '0')};")
         if s.get("user_agent"):
             lines.append(f"  user_agent \"{s['user_agent']}\";")
         if s.get("mode") == "ondemand":
@@ -2697,6 +2759,7 @@ def parse_flustream_conf(text: str, current_data: dict) -> dict:
             "mode": mode,
             "quality": "best",
             "engine": "ffmpeg",
+            "audio_track": "0",
             "buffer_mode": "30s",
             "user_agent": "",
             "enabled": True,
@@ -2717,9 +2780,9 @@ def parse_flustream_conf(text: str, current_data: dict) -> dict:
                 st["title"] = line.split(" ", 1)[1].strip('"\'')
             elif line.startswith("input "):
                 st["inputs"].append(line.split(" ", 1)[1].strip())
-            elif line.startswith("buffer_mode "): st["buffer_mode"] = line.split(" ", 1)[1].strip()
             elif line.startswith("quality "): st["quality"] = line.split(" ", 1)[1].strip()
             elif line.startswith("engine "): st["engine"] = line.split(" ", 1)[1].strip()
+            elif line.startswith("audio_track "): st["audio_track"] = line.split(" ", 1)[1].strip()
             elif line.startswith("user_agent "): st["user_agent"] = line.split(" ", 1)[1].strip('"\'')
             elif line.startswith("source_timeout "):
                 st["source_timeout"] = int(line.split(" ", 1)[1].strip())
@@ -2792,6 +2855,8 @@ class StreamWorker:
         self.bitrate_in_kbps: float = 0.0
         self.cached_buffer_sec: int = 0
         self.codec_info: str = "Pass-through (-c copy)"
+        self.detected_audio_tracks: List[dict] = []
+        self._last_synced_seq: int = -1
         self.probed_once: bool = False
         self.processed_segments: set = set()
         self.stop_event = asyncio.Event()
@@ -2858,13 +2923,16 @@ class StreamWorker:
         self._kbps_samples.clear()
         self._last_astrag_pkts = 0
         self._last_astrag_pkt_ts = 0.0
+        self._last_synced_seq = -1
 
     async def _resolve_best_variant_url(self, raw_url: str) -> str:
         input_url = normalize_input_url(raw_url)
         pref = str(self.cfg.get("quality", "best")).lower()
         if not input_url.startswith(("http://", "https://")) or not self.manager.http_client:
             return raw_url
-        if any(input_url.lower().endswith(ext) for ext in (".ts", "/mpegts", ".mp4", ".flv")):
+        low_u = input_url.lower().split("?", 1)[0]
+        # Пробируем HTTP-манифест ТОЛЬКО для HLS (.m3u8/.m3u), чтобы не открывать двойное соединение на прямых MPEG-TS потоках (например /play/a011?auth=...)
+        if not (low_u.endswith((".m3u8", ".m3u")) or ".m3u8" in input_url.lower() or raw_url.lower().startswith(("hls://", "hlss://"))):
             return raw_url
         try:
             headers = {
@@ -2932,8 +3000,8 @@ class StreamWorker:
         self.ram_dir.mkdir(parents=True, exist_ok=True)
         cmd = [
             "ffmpeg", "-nostdin", "-y", "-hide_banner", "-loglevel", "error",
-            "-threads", "1", "-probesize", "5000000", "-analyzeduration", "5000000",
-            "-fflags", "+genpts+discardcorrupt"
+            "-threads", "1", "-probesize", "1500000", "-analyzeduration", "2000000",
+            "-fflags", "+discardcorrupt+nobuffer"
         ]
         if input_url.startswith("rtsp://"):
             cmd += ["-rtsp_transport", "tcp"]
@@ -2961,15 +3029,30 @@ class StreamWorker:
                 input_url = u_srt if "?" in u_srt else f"{u_srt}?mode=caller&timeout=8000000&latency=200000"
 
         hls_list_sz = "5" if self.cfg.get("buffer_mode") == "normal" else "10"
+        audio_sel = str(self.cfg.get("audio_track", "0")).strip().lower()
+        map_args = ["-map", "0:v:0?"]
+        if audio_sel in ("none", "off", "-1"):
+            map_args += ["-an"]
+        elif audio_sel == "all":
+            map_args += ["-map", "0:a?"]
+        else:
+            try:
+                a_idx = max(0, int(audio_sel))
+            except ValueError:
+                a_idx = 0
+            map_args += ["-map", f"0:a:{a_idx}?"]
+
         cmd += [
             "-i", input_url,
-            "-map", "0:v:0?", "-map", "0:a?",
+            *map_args,
             "-sn", "-dn",
             "-map_metadata", "-1",
             "-map_chapters", "-1",
             "-c", "copy",
+            "-vsync", "0",
+            "-max_interleave_delta", "0",
             "-mpegts_flags", "resend_headers+initial_discontinuity",
-            "-max_muxing_queue_size", "8192",
+            "-max_muxing_queue_size", "4096",
             "-f", "hls",
             "-hls_time", "4",
             "-hls_list_size", hls_list_sz,
@@ -2981,13 +3064,13 @@ class StreamWorker:
         return cmd
 
     async def _spawn_pushes(self):
+        pushes_cfg = [p.strip() for p in self.cfg.get("pushes", []) if p and p.strip()]
+        if not pushes_cfg:
+            return
         m3u8_path = self.ram_dir / "index.m3u8"
         if not m3u8_path.exists() or len(list(self.ram_dir.glob("seg_*.ts"))) < 1:
             return
-        for raw_push in self.cfg.get("pushes", []):
-            push_url = raw_push.strip()
-            if not push_url:
-                continue
+        for push_url in pushes_cfg:
             if push_url in self.push_procs:
                 if self.push_procs[push_url].returncode is not None:
                     del self.push_procs[push_url]
@@ -3123,9 +3206,20 @@ class StreamWorker:
                     eng._finish_segment()
                 except Exception:
                     pass
+
+        a_tracks = getattr(eng, "_audio_tracks_info", None)
+        if a_tracks:
+            self.detected_audio_tracks = list(a_tracks)
+
         segs_dict = getattr(eng, "_segments", {})
         if not segs_dict:
             return
+        cur_seq = int(getattr(eng, "_sequence", 0))
+        m3u8_final = self.ram_dir / "index.m3u8"
+        if cur_seq == self._last_synced_seq and m3u8_final.exists():
+            return
+        self._last_synced_seq = cur_seq
+
         self.ram_dir.mkdir(parents=True, exist_ok=True)
         seg_items = list(segs_dict.items())
         first_seq = seg_items[0][0]
@@ -3145,28 +3239,29 @@ class StreamWorker:
             fname = f"seg_{seq:06d}.ts"
             valid_names.add(fname)
             fpath = self.ram_dir / fname
-            seg_bytes = bytes(seg.data) if not isinstance(seg.data, bytes) else seg.data
-            if not fpath.exists() and seg_bytes:
-                tmp_p = self.ram_dir / f".{fname}.tmp"
-                try:
-                    tmp_p.write_bytes(seg_bytes)
-                    os.replace(tmp_p, fpath)
-                except Exception:
-                    pass
-                if not self.probed_once and fpath.exists():
-                    self.probed_once = True
-                    asyncio.create_task(self._probe_codecs(fpath))
-                if dvr_hours > 0 and fpath.exists():
-                    ts_int = int(time.time())
-                    day_str = time.strftime("%Y-%m-%d", time.gmtime(ts_int))
-                    target_dir = self.dvr_dir / day_str
-                    target_dir.mkdir(parents=True, exist_ok=True)
-                    target_file = target_dir / f"{ts_int}_{max(1, int(round(seg.duration)))}.ts"
-                    if not target_file.exists():
-                        try:
-                            shutil.copy2(fpath, target_file)
-                        except Exception:
-                            pass
+            if not fpath.exists():
+                seg_bytes = seg.data if isinstance(seg.data, bytes) else bytes(seg.data)
+                if seg_bytes:
+                    tmp_p = self.ram_dir / f".{fname}.tmp"
+                    try:
+                        tmp_p.write_bytes(seg_bytes)
+                        os.replace(tmp_p, fpath)
+                    except Exception:
+                        pass
+                    if not self.probed_once and fpath.exists():
+                        self.probed_once = True
+                        asyncio.create_task(self._probe_codecs(fpath))
+                    if dvr_hours > 0 and fpath.exists():
+                        ts_int = int(time.time())
+                        day_str = time.strftime("%Y-%m-%d", time.gmtime(ts_int))
+                        target_dir = self.dvr_dir / day_str
+                        target_dir.mkdir(parents=True, exist_ok=True)
+                        target_file = target_dir / f"{ts_int}_{max(1, int(round(seg.duration)))}.ts"
+                        if not target_file.exists():
+                            try:
+                                shutil.copy2(fpath, target_file)
+                            except Exception:
+                                pass
             if getattr(seg, "discontinuity", False):
                 m3u8_lines.append("#EXT-X-DISCONTINUITY")
             dur = max(0.2, float(getattr(seg, "duration", 3.0)))
@@ -3175,7 +3270,6 @@ class StreamWorker:
             m3u8_lines.append(fname)
 
         m3u8_tmp = self.ram_dir / ".index.m3u8.tmp"
-        m3u8_final = self.ram_dir / "index.m3u8"
         try:
             m3u8_tmp.write_text("\n".join(m3u8_lines) + "\n", encoding="utf-8")
             os.replace(m3u8_tmp, m3u8_final)
@@ -3193,12 +3287,21 @@ class StreamWorker:
         self.cached_buffer_sec = min(self.target_buffer_seconds(), max(1, int(round(total_dur))))
         elem_pids = getattr(eng, "_elementary_pids", {})
         if elem_pids and (self.codec_info.startswith("Pass-through") or self.codec_info.startswith("ERR:")):
+            v_codec = getattr(eng, "_video_codec_name", "H264")
+            sel_apid = getattr(eng, "_selected_audio_pid", None)
             tracks = []
-            for tname in elem_pids.values():
+            for pid_k, tname in elem_pids.items():
                 if tname == "VIDEO":
-                    tracks.append("H264 1920x1080")
+                    tracks.append(f"{v_codec} 1920x1080")
                 elif tname == "AUDIO":
-                    tracks.append("AAC")
+                    acodec = "AAC"
+                    for tr in (a_tracks or []):
+                        if tr.get("pid") == pid_k:
+                            acodec = tr.get("codec", "AAC")
+                            if tr.get("lang"):
+                                acodec = f"{acodec} ({tr['lang']})"
+                            break
+                    tracks.append(acodec)
             if tracks:
                 self.codec_info = " / ".join(tracks)
 
@@ -3257,6 +3360,7 @@ class StreamWorker:
                             stream_options={
                                 "user_agent": primary_ua,
                                 "fallback_user_agent": fallback_ua,
+                                "audio_track": str(self.cfg.get("audio_track", "0")),
                             },
                         )
                         await self.astrag_engine.start()
@@ -3313,7 +3417,7 @@ class StreamWorker:
                     await asyncio.sleep(2.0)
                     continue
 
-                await asyncio.sleep(0.25)
+                await asyncio.sleep(0.5)
                 continue
 
             if self.astrag_engine is not None:
@@ -3401,7 +3505,7 @@ class StreamWorker:
                 await asyncio.sleep(2.0)
                 continue
 
-            await asyncio.sleep(0.8)
+            await asyncio.sleep(1.0)
 
 
 class StreamManager:
@@ -3510,6 +3614,7 @@ class StreamManager:
                     or old_cfg.get("buffer_mode", "30s") != scfg.get("buffer_mode", "30s")
                     or old_cfg.get("user_agent", "") != scfg.get("user_agent", "")
                     or old_cfg.get("engine", "ffmpeg") != scfg.get("engine", "ffmpeg")
+                    or str(old_cfg.get("audio_track", "0")) != str(scfg.get("audio_track", "0"))
                 ):
                     w.engine_error = False
                     w.status = "Waiting" if scfg.get("enabled", True) else "Disabled"
@@ -4413,13 +4518,18 @@ async def api_status(req: web.Request) -> web.Response:
         target_buf = w.target_buffer_seconds() if w else (6 if s.get("buffer_mode") == "normal" else 30)
 
         eng_name = s.get("engine", "ffmpeg")
+        audio_trk = str(s.get("audio_track", "0"))
         is_eng_err = (status == "Error") or bool(getattr(w, "engine_error", False))
+        a_tracks_list = list(getattr(w, "detected_audio_tracks", []) or []) if w else []
         streams_out.append({
             **s,
             "engine": eng_name,
+            "audio_track": audio_trk,
             "runtime": {
                 "status": status,
                 "engine": eng_name,
+                "audio_track": audio_trk,
+                "audio_tracks": a_tracks_list,
                 "engine_error": is_eng_err,
                 "bitrate_kbps": in_kbps,
                 "active_input": active_inp,
@@ -4478,12 +4588,15 @@ async def api_save_stream(req: web.Request) -> web.Response:
                 body["buffer_mode"] = s.get("buffer_mode", "30s")
             if "engine" not in body:
                 body["engine"] = s.get("engine", "ffmpeg")
+            if "audio_track" not in body:
+                body["audio_track"] = str(s.get("audio_track", "0"))
             streams[idx] = body
             replaced = True
             break
     if not replaced:
         body.setdefault("buffer_mode", "30s")
         body.setdefault("engine", "ffmpeg")
+        body.setdefault("audio_track", "0")
         streams.append(body)
     MANAGER.config_data["streams"] = streams
     MANAGER.save_configs()
@@ -4495,11 +4608,14 @@ async def api_set_stream_engine(req: web.Request) -> web.Response:
     body = await req.json()
     target_name = body.get("name", "")
     eng = "astrag" if body.get("engine") == "astrag" else "ffmpeg"
+    audio_track = body.get("audio_track")
     new_inputs = body.get("inputs")
     new_enabled = body.get("enabled")
     for s in MANAGER.config_data.get("streams", []):
         if s["name"] == target_name:
             s["engine"] = eng
+            if audio_track is not None:
+                s["audio_track"] = str(audio_track).strip()
             if isinstance(new_inputs, list) and any(str(x).strip() for x in new_inputs):
                 s["inputs"] = [str(x).strip() for x in new_inputs if str(x).strip()]
             if isinstance(new_enabled, bool):
@@ -4517,7 +4633,29 @@ async def api_set_stream_engine(req: web.Request) -> web.Response:
                 await MANAGER.apply_streams()
             break
     MANAGER.save_configs()
-    return web.json_response({"ok": True, "engine": eng})
+    return web.json_response({"ok": True, "engine": eng, "audio_track": str(audio_track or "0")})
+
+
+async def api_set_audio_track(req: web.Request) -> web.Response:
+    body = await req.json()
+    target_name = body.get("name", "")
+    audio_track = str(body.get("audio_track", "0")).strip()
+    for s in MANAGER.config_data.get("streams", []):
+        if s["name"] == target_name:
+            s["audio_track"] = audio_track
+            w = MANAGER.workers.get(s["name"])
+            if w:
+                w.cfg = s
+                w.engine_error = False
+                w.touch_client()
+                w.probed_once = False
+                w.status = "Waiting" if s.get("enabled", True) else "Disabled"
+                await w._kill_ffmpeg()
+            else:
+                await MANAGER.apply_streams()
+            break
+    MANAGER.save_configs()
+    return web.json_response({"ok": True, "audio_track": audio_track})
 
 async def api_set_buffer_mode(req: web.Request) -> web.Response:
     body = await req.json()
@@ -5811,12 +5949,29 @@ INDEX_HTML = r"""<!DOCTYPE html>
                 </select>
               </div>
             </div>
-            <div style="margin-top: 12px; max-width: 260px;">
-              <label id="i18n_lbl_engine" style="font-size: 11.2px; opacity:0.65; font-weight:700;">Playback Engine</label>
-              <select id="f_engine" class="sp-line-input" onchange="onPlaybackEngineChange(this.value)">
-                <option value="ffmpeg">FFmpeg (built-in)</option>
-                <option value="astrag">AstraG</option>
-              </select>
+            <div style="margin-top: 12px; display:flex; flex-wrap:wrap; gap:14.4px; align-items:end;">
+              <div style="min-width: 220px; flex:1; max-width: 280px;">
+                <label id="i18n_lbl_engine" style="font-size: 11.2px; opacity:0.65; font-weight:700;">Playback Engine</label>
+                <select id="f_engine" class="sp-line-input" onchange="onPlaybackEngineChange(this.value)">
+                  <option value="ffmpeg">FFmpeg (built-in)</option>
+                  <option value="astrag">AstraG</option>
+                </select>
+              </div>
+              <div style="min-width: 260px; flex:1.3; max-width: 380px;">
+                <label id="i18n_lbl_audio_track" style="font-size: 11.2px; opacity:0.65; font-weight:700;">Звуковая дорожка (Audio Track на выход)</label>
+                <select id="f_audio_track" class="sp-line-input" onchange="onAudioTrackChange(this.value)">
+                  <option value="0">Дорожка #1 (Только 1-я аудио — авто)</option>
+                  <option value="1">Дорожка #2 (Только 2-я аудио)</option>
+                  <option value="2">Дорожка #3 (Только 3-я аудио)</option>
+                  <option value="3">Дорожка #4 (Только 4-я аудио)</option>
+                  <option value="4">Дорожка #5 (Только 5-я аудио)</option>
+                  <option value="5">Дорожка #6 (Только 6-я аудио)</option>
+                  <option value="6">Дорожка #7 (Только 7-я аудио)</option>
+                  <option value="7">Дорожка #8 (Только 8-я аудио)</option>
+                  <option value="all">Все дорожки (All audio tracks)</option>
+                  <option value="none">Без звука (Только видео / Mute)</option>
+                </select>
+              </div>
             </div>
           </div>
 
@@ -6751,10 +6906,13 @@ async function pollStatus() {
       if (arr.length > 30) arr.shift();
     });
 
-    renderStreamsTable(true);
-    renderSessionsTable();
-    renderPulseCharts();
-    if (CURRENT_SECTION === 'stream_page' && EDITING_NAME) {
+    if (CURRENT_SECTION === 'streams') {
+      renderStreamsTable(true);
+    } else if (CURRENT_SECTION === 'sessions') {
+      renderSessionsTable();
+    } else if (CURRENT_SECTION === 'pulse') {
+      renderPulseCharts();
+    } else if (CURRENT_SECTION === 'stream_page' && EDITING_NAME) {
       updateStreamPageLiveStats();
     }
   } catch (e) {}
@@ -7062,6 +7220,7 @@ function openStreamEditor(name) {
     document.getElementById('f_quality').value = 'best';
     document.getElementById('f_buf_mode').value = '30s';
     if (document.getElementById('f_engine')) document.getElementById('f_engine').value = 'ffmpeg';
+    if (document.getElementById('f_audio_track')) document.getElementById('f_audio_track').value = '0';
     EDIT_INPUTS_ARR = [''];
     document.getElementById('f_user_agent').value = defaultUa;
     document.getElementById('f_ua_preset').value = defaultUa;
@@ -7098,6 +7257,7 @@ function openStreamEditor(name) {
     document.getElementById('f_quality').value = s.quality || 'best';
     document.getElementById('f_buf_mode').value = s.buffer_mode || (s.runtime && s.runtime.buffer_mode) || '30s';
     if (document.getElementById('f_engine')) document.getElementById('f_engine').value = s.engine || (s.runtime && s.runtime.engine) || 'ffmpeg';
+    if (document.getElementById('f_audio_track')) document.getElementById('f_audio_track').value = String(s.audio_track !== undefined ? s.audio_track : ((s.runtime && s.runtime.audio_track !== undefined) ? s.runtime.audio_track : '0'));
     EDIT_INPUTS_ARR = (s.inputs && s.inputs.length) ? [...s.inputs] : [];
     const uaVal = s.user_agent || defaultUa;
     document.getElementById('f_user_agent').value = uaVal;
@@ -7287,6 +7447,25 @@ function updateStreamPageLiveStats() {
   }
   document.getElementById('sp_ov_up').textContent = (st === 'Online' && s.runtime.uptime) ? fmtStreamUptime(s.runtime.uptime) : '0m';
 
+  const audioSelEl = document.getElementById('f_audio_track');
+  const detectedTracks = (s.runtime && Array.isArray(s.runtime.audio_tracks)) ? s.runtime.audio_tracks : [];
+  if (audioSelEl) {
+    for (let idx = 0; idx < 8; idx++) {
+      const opt = audioSelEl.querySelector(`option[value="${idx}"]`);
+      if (!opt) continue;
+      const trInfo = detectedTracks.find(t => Number(t.index) === idx);
+      if (trInfo) {
+        const langPart = trInfo.lang ? `, ${trInfo.lang.toUpperCase()}` : '';
+        const pidPart = trInfo.pid ? `, PID ${trInfo.pid}` : '';
+        opt.textContent = `Дорожка #${idx + 1} — ${trInfo.codec || 'AUDIO'}${langPart}${pidPart} (Только эта)`;
+      } else {
+        opt.textContent = idx === 0
+          ? 'Дорожка #1 (Только 1-я аудио — авто)'
+          : `Дорожка #${idx + 1} (Только ${idx + 1}-я аудио)`;
+      }
+    }
+  }
+
   const inBox = document.getElementById('sp_mi_in_box');
   const outBox = document.getElementById('sp_mi_out_box');
   if (inBox && outBox) {
@@ -7297,21 +7476,35 @@ function updateStreamPageLiveStats() {
         const parts = codecs.split('/').map(x => x.trim()).filter(Boolean);
         let inHtml = '', outHtml = '';
         let vIdx = 1, aIdx = 1;
-        const copyTag = (curEng === 'astrag') ? '(AstraG Native)' : '(-c copy)';
+        const copyTag = (curEng === 'astrag') ? '(AstraG Single-Audio)' : '(-c copy)';
+        const curAudioSel = String(s.audio_track !== undefined ? s.audio_track : ((s.runtime && s.runtime.audio_track !== undefined) ? s.runtime.audio_track : '0'));
         parts.forEach(p => {
             let lower = p.toLowerCase();
             if (lower.match(/\d+x\d+/)) {
                 inHtml += `<span class="mi-track-v" style="margin-bottom:4.3px;">v${vIdx} ${lower}</span>`;
                 outHtml += `<span class="mi-track-v" style="margin-bottom:4.3px;">v${vIdx} ${lower} ${copyTag}</span>`;
                 vIdx++;
-            } else {
+            } else if (!detectedTracks.length) {
                 inHtml += `<span class="mi-track-a" style="margin-bottom:4.3px;">a${aIdx} ${lower}</span>`;
                 outHtml += `<span class="mi-track-a" style="margin-bottom:4.3px;">a${aIdx} ${lower} ${copyTag}</span>`;
                 aIdx++;
             }
         });
-        inBox.innerHTML = inHtml;
-        outBox.innerHTML = outHtml;
+        if (detectedTracks.length > 0) {
+            detectedTracks.forEach(tr => {
+                const idx = Number(tr.index || 0);
+                const isSelected = (curAudioSel === 'all') || (curAudioSel !== 'none' && String(idx) === curAudioSel) || (curAudioSel !== 'none' && curAudioSel !== 'all' && Number(curAudioSel) >= detectedTracks.length && idx === 0);
+                const desc = `${(tr.codec || 'audio').toLowerCase()}${tr.lang ? ' (' + tr.lang + ')' : ''} pid:${tr.pid}`;
+                if (isSelected) {
+                    inHtml += `<span class="mi-track-a" style="margin-bottom:4.3px;">a${idx + 1} ${desc} &check;</span>`;
+                    outHtml += `<span class="mi-track-a" style="margin-bottom:4.3px;">a${idx + 1} ${desc} ${copyTag}</span>`;
+                } else {
+                    inHtml += `<span class="mi-track-a" style="margin-bottom:4.3px; opacity:0.45; text-decoration:line-through;">a${idx + 1} ${desc} (dropped)</span>`;
+                }
+            });
+        }
+        inBox.innerHTML = inHtml || '<div style="opacity:0.5;font-size:10.4px;margin-top:5.8px;">No data</div>';
+        outBox.innerHTML = outHtml || '<div style="opacity:0.5;font-size:10.4px;margin-top:5.8px;">No data</div>';
     }
   }
 
@@ -7404,6 +7597,7 @@ async function onPlaybackEngineChange(engVal) {
       body: JSON.stringify({
         name: EDITING_NAME,
         engine: engVal,
+        audio_track: document.getElementById('f_audio_track') ? document.getElementById('f_audio_track').value : '0',
         inputs: cleanInputs,
         enabled: chkEn ? chkEn.checked : true
       })
@@ -7418,6 +7612,36 @@ async function onPlaybackEngineChange(engVal) {
     }, 1500);
   } catch (e) {}
 }
+
+async function onAudioTrackChange(trackVal) {
+  if (!EDITING_NAME) return;
+  const s = STATE.streams.find(x => x.name === EDITING_NAME);
+  if (s) {
+    s.audio_track = String(trackVal);
+    if (s.runtime) s.runtime.audio_track = String(trackVal);
+    updateStreamPageLiveStats();
+  }
+  try {
+    await fetch('/api/v3/streams/audio_track', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        name: EDITING_NAME,
+        audio_track: String(trackVal)
+      })
+    });
+    const lbl = (trackVal === 'all') ? 'Все аудиодорожки' : (trackVal === 'none' ? 'Без звука (Mute)' : `Только дорожка #${Number(trackVal) + 1}`);
+    toast(`Звуковая дорожка: ${lbl}`);
+    await pollStatus();
+    setTimeout(async () => {
+      await pollStatus();
+      if (CURRENT_SECTION === 'stream_page' && CURRENT_SP_TAB === 'overview') {
+        playOverviewStream('hls');
+      }
+    }, 1500);
+  } catch (e) {}
+}
+
 async function saveStreamModal() {
   const pendingNewUrl = document.getElementById('sp_new_url_inp').value.trim();
   if (pendingNewUrl) {
@@ -7432,6 +7656,7 @@ async function saveStreamModal() {
     mode: document.getElementById('f_mode').value,
     quality: document.getElementById('f_quality').value,
     engine: document.getElementById('f_engine') ? document.getElementById('f_engine').value : 'ffmpeg',
+    audio_track: document.getElementById('f_audio_track') ? document.getElementById('f_audio_track').value : '0',
     buffer_mode: document.getElementById('f_buf_mode').value,
     user_agent: document.getElementById('f_user_agent').value.trim(),
     enabled: document.getElementById('f_enabled').checked,
@@ -7737,6 +7962,7 @@ def create_app() -> web.Application:
     app.router.add_post("/api/v3/streams", api_save_stream)
     app.router.add_post("/api/v3/streams/buffer_mode", api_set_buffer_mode)
     app.router.add_post("/api/v3/streams/engine", api_set_stream_engine)
+    app.router.add_post("/api/v3/streams/audio_track", api_set_audio_track)
     app.router.add_delete("/api/v3/streams/{name}", api_delete_stream)
     app.router.add_post("/api/v3/streams/{name}/restart", api_restart_stream)
     app.router.add_post("/api/v3/streams/{name}/toggle", api_toggle_stream)
