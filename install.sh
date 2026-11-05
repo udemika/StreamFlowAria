@@ -1800,16 +1800,16 @@ class Engine:
                             seg_entries.append((seg_url, next_dur if next_dur is not None else target_duration))
                             next_dur = None
 
-                    if first_load and len(seg_entries) > 2:
-                        for old_url, _ in seg_entries[:-2]:
+                    if first_load and len(seg_entries) > 3:
+                        for old_url, _ in seg_entries[:-3]:
                             seen_segments[old_url] = True
                     first_load = False
 
                     new_entries = [(u, d) for (u, d) in seg_entries if u not in seen_segments]
                     if len(new_entries) > 3:
-                        for old_url, _ in new_entries[:-2]:
+                        for old_url, _ in new_entries[:-3]:
                             seen_segments[old_url] = True
-                        new_entries = new_entries[-2:]
+                        new_entries = new_entries[-3:]
 
                     for seg_url, seg_dur in new_entries:
                         if not self._running:
@@ -1825,6 +1825,7 @@ class Engine:
                                 seg_bps = (clen / seg_dur) if (clen >= 188 and seg_dur > 0) else 0.0
                                 seg_read = 0
                                 first_chunk = True
+                                seg_chunks_buf = []
                                 async for chunk in seg_resp.aiter_bytes(131036):
                                     if not self._running:
                                         return
@@ -1838,12 +1839,25 @@ class Engine:
                                     if seg_read + len(chunk) > max_single_seg_bytes:
                                         break
                                     seg_read += len(chunk)
-                                    while self._running and prefetch_bytes >= max_prefetch_bytes:
-                                        await asyncio.sleep(0.04)
-                                    if not self._running:
-                                        return
-                                    prefetch_bytes += len(chunk)
-                                    await prefetch_queue.put((chunk, seg_dur, seg_bps, is_seg_start))
+                                    if seg_bps > 0:
+                                        while self._running and prefetch_bytes >= max_prefetch_bytes:
+                                            await asyncio.sleep(0.04)
+                                        if not self._running:
+                                            return
+                                        prefetch_bytes += len(chunk)
+                                        await prefetch_queue.put((chunk, seg_dur, seg_bps, is_seg_start))
+                                    else:
+                                        seg_chunks_buf.append((chunk, is_seg_start))
+                                if seg_chunks_buf and seg_read >= 188:
+                                    calc_bps = (seg_read / max(0.5, seg_dur)) if seg_dur > 0 else 0.0
+                                    for c_bytes, c_start in seg_chunks_buf:
+                                        while self._running and prefetch_bytes >= max_prefetch_bytes:
+                                            await asyncio.sleep(0.04)
+                                        if not self._running:
+                                            return
+                                        prefetch_bytes += len(c_bytes)
+                                        await prefetch_queue.put((c_bytes, seg_dur, calc_bps, c_start))
+                                    seg_chunks_buf.clear()
                                 if seg_read >= 188:
                                     seen_segments[seg_url] = True
                                     consecutive_errors = 0
@@ -1866,12 +1880,12 @@ class Engine:
                                 producer_error = exc
                                 return
 
-                    if prefetch_bytes < 256 * 1024:
-                        poll_sleep = 0.20
+                    if prefetch_bytes < 512 * 1024:
+                        poll_sleep = 0.18
                     elif new_entries:
-                        poll_sleep = min(0.75, max(0.30, target_duration * 0.22))
+                        poll_sleep = min(0.65, max(0.25, target_duration * 0.20))
                     else:
-                        poll_sleep = 0.35
+                        poll_sleep = 0.30
                     await asyncio.sleep(poll_sleep)
             finally:
                 try:
@@ -1880,7 +1894,7 @@ class Engine:
                     pass
 
         producer_task = asyncio.create_task(_prefetch_producer())
-        bootstrap_remaining = 8 * 1024 * 1024  # Fast-fill initial 2 HLS segments from historical segment
+        bootstrap_remaining = 3 * 1024 * 1024  # Fast-fill initial 1 HLS segment so prefetch queue retains smooth pacing buffer
         slice_bytes = 188 * 174  # 32,712 bytes when live .ts/UDP subscribers exist
         seg_clock = None
         try:
@@ -1896,13 +1910,15 @@ class Engine:
                     self._hls_seg_boundary_pkts = 64
                     self._hls_seg_seen_pids.clear()
 
-                if bootstrap_remaining > 0 and len(self._segments) < 2 and not self._subscribers:
+                if bootstrap_remaining > 0 and len(self._segments) < 1 and not self._subscribers:
                     self.feed(chunk)
                     bootstrap_remaining -= chunk_len
                     del chunk
                     await asyncio.sleep(0)
                     continue
                 bootstrap_remaining = 0
+
+                eff_bps = seg_bps if seg_bps > 0 else ((self._pcr_bitrate / 8.0) if (self._pcr_bitrate and self._pcr_bitrate > 0) else 0.0)
 
                 if not self._subscribers and not self._output_states:
                     now = time.monotonic()
@@ -1914,10 +1930,10 @@ class Engine:
                     pcr_delta = self._timeline - t_pcr_before
                     if 0.0 < pcr_delta <= 1.50:
                         slice_dur = pcr_delta
-                    elif self._pcr_last is None and seg_bps > 0:
-                        slice_dur = chunk_len / seg_bps
+                    elif eff_bps > 0:
+                        slice_dur = chunk_len / eff_bps
                     else:
-                        slice_dur = 0.0
+                        slice_dur = 0.02
                     if prefetch_bytes > 3072 * 1024:
                         pace_factor = 0.92
                     elif prefetch_bytes > 2048 * 1024:
@@ -1952,10 +1968,10 @@ class Engine:
 
                         if 0.0 < pcr_delta <= 0.80:
                             slice_dur = pcr_delta
-                        elif self._pcr_last is None and seg_bps > 0:
-                            slice_dur = step / seg_bps
+                        elif eff_bps > 0:
+                            slice_dur = step / eff_bps
                         else:
-                            slice_dur = 0.0
+                            slice_dur = 0.008
 
                         # Hardware-grade PLL pacing: keep 1 full segment buffered at 1.0x PCR speed
                         if prefetch_bytes > 3072 * 1024:
@@ -2269,15 +2285,6 @@ class _AsyncHttpResponse:
                             if time.monotonic() > deadline:
                                 raise asyncio.TimeoutError()
                             await reader._wait_for_data("readexactly")
-                        if is_remote and transport is not None and len(rbuf) < n and not reader.at_eof():
-                            try:
-                                transport.pause_reading()
-                                await asyncio.sleep(0.045)
-                            finally:
-                                try:
-                                    transport.resume_reading()
-                                except Exception:
-                                    pass
                 out = bytearray(rbuf[:n])
                 del rbuf[:n]
                 reader._maybe_resume_transport()
@@ -2338,15 +2345,6 @@ class _AsyncHttpResponse:
                     data = await asyncio.wait_for(reader.read(chunk_size), timeout=timeout)
                 if not data:
                     break
-                if is_remote and transport is not None and rbuf is not None and len(rbuf) < chunk_size and not reader.at_eof():
-                    try:
-                        transport.pause_reading()
-                        await asyncio.sleep(0.045)
-                    finally:
-                        try:
-                            transport.resume_reading()
-                        except Exception:
-                            pass
                 yield bytearray(data)
 
     async def aclose(self):
@@ -2935,7 +2933,7 @@ class StreamWorker:
         cmd = [
             "ffmpeg", "-nostdin", "-y", "-hide_banner", "-loglevel", "error",
             "-threads", "1", "-probesize", "5000000", "-analyzeduration", "5000000",
-            "-fflags", "+genpts+discardcorrupt+igndts"
+            "-fflags", "+genpts+discardcorrupt"
         ]
         if input_url.startswith("rtsp://"):
             cmd += ["-rtsp_transport", "tcp"]
@@ -2962,7 +2960,7 @@ class StreamWorker:
             else:
                 input_url = u_srt if "?" in u_srt else f"{u_srt}?mode=caller&timeout=8000000&latency=200000"
 
-        hls_list_sz = "2" if self.cfg.get("buffer_mode") == "normal" else "8"
+        hls_list_sz = "5" if self.cfg.get("buffer_mode") == "normal" else "10"
         cmd += [
             "-i", input_url,
             "-map", "0:v:0?", "-map", "0:a?",
@@ -2970,14 +2968,13 @@ class StreamWorker:
             "-map_metadata", "-1",
             "-map_chapters", "-1",
             "-c", "copy",
-            "-mpegts_flags", "resend_headers",
+            "-mpegts_flags", "resend_headers+initial_discontinuity",
             "-max_muxing_queue_size", "8192",
-            "-avoid_negative_ts", "make_non_negative",
             "-f", "hls",
-            "-hls_time", "6",
+            "-hls_time", "4",
             "-hls_list_size", hls_list_sz,
-            "-hls_delete_threshold", "1",
-            "-hls_flags", "delete_segments+temp_file",
+            "-hls_delete_threshold", "3",
+            "-hls_flags", "delete_segments+temp_file+independent_segments",
             "-hls_segment_filename", "seg_%06d.ts",
             "index.m3u8"
         ]
@@ -3118,8 +3115,10 @@ class StreamWorker:
         eng = self.astrag_engine
         if eng is None:
             return
-        if not getattr(eng, "_segments", None) and len(getattr(eng, "_current", b"")) >= 188 * 128:
-            if (time.monotonic() - getattr(eng, "_created", time.monotonic())) >= 1.8:
+        if (not getattr(eng, "_segments", None) and
+                not getattr(eng, "_seen_video_keyframes", False) and
+                len(getattr(eng, "_current", b"")) >= 188 * 128):
+            if (time.monotonic() - getattr(eng, "_created", time.monotonic())) >= 2.0:
                 try:
                     eng._finish_segment()
                 except Exception:
@@ -3129,12 +3128,16 @@ class StreamWorker:
             return
         self.ram_dir.mkdir(parents=True, exist_ok=True)
         seg_items = list(segs_dict.items())
+        first_seq = seg_items[0][0]
         valid_names = set()
+        for grace_seq in range(max(0, first_seq - 4), first_seq):
+            valid_names.add(f"seg_{grace_seq:06d}.ts")
         m3u8_lines = [
             "#EXTM3U",
             "#EXT-X-VERSION:3",
             f"#EXT-X-TARGETDURATION:{max(1, int(getattr(eng, '_playlist_target', 4)))}",
-            f"#EXT-X-MEDIA-SEQUENCE:{seg_items[0][0]}",
+            f"#EXT-X-MEDIA-SEQUENCE:{first_seq}",
+            f"#EXT-X-DISCONTINUITY-SEQUENCE:{int(getattr(eng, '_evicted_discontinuities', 0))}",
         ]
         total_dur = 0.0
         dvr_hours = int(self.cfg.get("dvr_hours", 0))
@@ -3243,14 +3246,14 @@ class StreamWorker:
                         primary_ua = cfg_ua
                         fallback_ua = "AstraG/2.0"
 
-                    max_segs = 3 if self.cfg.get("buffer_mode") == "normal" else 8
+                    max_segs = 6 if self.cfg.get("buffer_mode") == "normal" else 10
                     try:
                         self.astrag_engine = AstraGEngine(
                             ordered_urls,
                             segment_duration=3.0,
                             max_segments=max_segs,
-                            max_segment_bytes=6 * 1024 * 1024,
-                            max_hls_bytes=24 * 1024 * 1024,
+                            max_segment_bytes=8 * 1024 * 1024,
+                            max_hls_bytes=48 * 1024 * 1024,
                             stream_options={
                                 "user_agent": primary_ua,
                                 "fallback_user_agent": fallback_ua,
@@ -3310,7 +3313,7 @@ class StreamWorker:
                     await asyncio.sleep(2.0)
                     continue
 
-                await asyncio.sleep(0.5)
+                await asyncio.sleep(0.25)
                 continue
 
             if self.astrag_engine is not None:
@@ -3806,7 +3809,10 @@ async def ensure_ondemand_ready(w: StreamWorker) -> bool:
             segs_dict = getattr(w.astrag_engine, "_segments", {})
             if len(segs_dict) >= 1 and m3u8.exists():
                 return True
-            if int(w.astrag_engine.stats().get("packets", 0)) >= 64 and len(getattr(w.astrag_engine, "_current", b"")) >= 188 * 32:
+            if (not getattr(w.astrag_engine, "_seen_video_keyframes", False) and
+                    int(w.astrag_engine.stats().get("packets", 0)) >= 64 and
+                    len(getattr(w.astrag_engine, "_current", b"")) >= 188 * 32 and
+                    (time.monotonic() - getattr(w.astrag_engine, "_created", time.monotonic())) >= 2.0):
                 try:
                     w.astrag_engine._finish_segment()
                     w._sync_astrag_segments_to_ram()
@@ -3925,19 +3931,43 @@ async def handle_http_mpegts(req: web.Request) -> web.StreamResponse:
                     pass
                 if stale is None:
                     break
-            burst = eng.bootstrap_burst()
-            if burst:
-                await resp.write(burst)
-                sess.bytes_sent += len(burst)
+            burst_sent = False
+            aligned = False
+            audio_pids_aligned = set()
+            align_deadline = time.monotonic() + 1.2
+            align_packets = 0
+            max_align_packets = 4500
             while not sess.kicked and w.cfg.get("enabled", True) and w.astrag_engine is eng:
                 w.touch_client()
-                pkt = await asyncio.wait_for(queue.get(), timeout=10.0)
+                pkt = await asyncio.wait_for(queue.get(), timeout=12.0)
                 try:
                     queue.task_done()
                 except ValueError:
                     pass
                 if pkt is None:
                     break
+                if not aligned:
+                    align_packets += 1
+                    has_video = any(t == "VIDEO" for t in getattr(eng, "_elementary_pids", {}).values())
+                    if (not has_video and align_packets >= 16) or eng.is_video_keyframe_packet(pkt) or time.monotonic() >= align_deadline or align_packets >= max_align_packets:
+                        aligned = True
+                        burst = eng.bootstrap_burst()
+                        out_start = bytearray(burst + pkt) if burst else bytearray(pkt)
+                        await resp.write(bytes(out_start))
+                        sess.bytes_sent += len(out_start)
+                        burst_sent = True
+                    continue
+                if not burst_sent:
+                    burst = eng.bootstrap_burst()
+                    if burst:
+                        await resp.write(burst)
+                        sess.bytes_sent += len(burst)
+                    burst_sent = True
+                pid = ((pkt[1] & 0x1F) << 8) | pkt[2]
+                if getattr(eng, "_elementary_pids", {}).get(pid) == "AUDIO" and pid not in audio_pids_aligned:
+                    if not (pkt[1] & 0x40):
+                        continue
+                    audio_pids_aligned.add(pid)
                 buf = bytearray(pkt)
                 while len(buf) + 188 <= 32712 and not queue.empty():
                     nxt = queue.get_nowait()
@@ -3947,6 +3977,11 @@ async def handle_http_mpegts(req: web.Request) -> web.StreamResponse:
                         pass
                     if nxt is None:
                         break
+                    npid = ((nxt[1] & 0x1F) << 8) | nxt[2]
+                    if getattr(eng, "_elementary_pids", {}).get(npid) == "AUDIO" and npid not in audio_pids_aligned:
+                        if not (nxt[1] & 0x40):
+                            continue
+                        audio_pids_aligned.add(npid)
                     buf.extend(nxt)
                 await resp.write(bytes(buf))
                 sess.bytes_sent += len(buf)
@@ -3959,7 +3994,7 @@ async def handle_http_mpegts(req: web.Request) -> web.StreamResponse:
         return resp
     sent_history = set()
 
-    keep_segs = 2 if w.cfg.get("buffer_mode") == "normal" else 4
+    keep_segs = 1 if w.cfg.get("buffer_mode") == "normal" else 2
     try:
         f_list = [f for f in os.listdir(w.ram_dir) if f.startswith("seg_") and f.endswith(".ts")]
     except OSError:
@@ -3970,40 +4005,51 @@ async def handle_http_mpegts(req: web.Request) -> web.StreamResponse:
             sent_history.add(old_s)
 
     last_seq_num = -1
+    first_seg_burst = True
     try:
         while not sess.kicked and w.cfg.get("enabled", True):
             w.touch_client()
-            # Благодаря флагу +temp_file в папке появляются только на 100% дописанные сегменты seg_XXXXXX.ts
             segs = sorted(w.ram_dir.glob("seg_*.ts"), key=lambda p: p.name)
+            pending_segs = [s for s in segs if s.name not in sent_history]
             sent_any = False
-            for s in segs:
-                if s.name in sent_history:
-                    continue
+            for idx_s, s in enumerate(pending_segs):
                 try:
                     seq_num = int(s.stem.split("_")[1])
                 except Exception:
                     seq_num = last_seq_num + 1
-                # Защита от возврата назад при перезапуске ffmpeg
                 if last_seq_num != -1 and seq_num <= last_seq_num and (last_seq_num - seq_num) < 500:
                     sent_history.add(s.name)
                     continue
                 sent_history.add(s.name)
                 last_seq_num = seq_num
+                is_latest = (idx_s == len(pending_segs) - 1)
                 try:
+                    fsize = max(1, s.stat().st_size)
+                    seg_bps = fsize / float(HLS_SEG_TIME)
+                    seg_clock = time.monotonic()
                     with open(s, "rb") as f:
-                        while True:
-                            chunk = f.read(262144)
+                        while not sess.kicked and w.cfg.get("enabled", True):
+                            chunk = f.read(32712 if not first_seg_burst else 130848)
                             if not chunk:
                                 break
                             await resp.write(chunk)
                             sess.bytes_sent += len(chunk)
-                    sess.last_seen = time.time()
+                            sess.last_seen = time.time()
+                            if first_seg_burst:
+                                first_seg_burst = False
+                                continue
+                            if is_latest and seg_bps > 0:
+                                slice_dur = (len(chunk) / seg_bps) * 0.88
+                                seg_clock += slice_dur
+                                wait = seg_clock - time.monotonic()
+                                if wait > 0.005:
+                                    await asyncio.sleep(min(wait, 0.08))
                     sent_any = True
                 except Exception:
                     break
             if len(sent_history) > 200:
                 sent_history = set(sorted(sent_history)[-100:])
-            await asyncio.sleep(0.4 if not sent_any else 0.05)
+            await asyncio.sleep(0.15 if not sent_any else 0.02)
     except Exception:
         pass
     finally:
@@ -5809,7 +5855,10 @@ INDEX_HTML = r"""<!DOCTYPE html>
             <div>
               <div class="sp-card sp-subcard">
                 <div style="display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:8.6px;">
-                  <span class="sp-pill-online" id="sp_ov_status_pill">Online</span>
+                  <div style="display:flex; align-items:center; gap:6px;">
+                    <span class="sp-pill-online" id="sp_ov_status_pill">Online</span>
+                    <span id="sp_ov_engine_badge" style="display:inline-block; padding:3px 8px; border-radius:99px; font-size:11px; font-weight:800; background:rgba(59,130,246,0.14); color:#3b82f6; border:1px solid rgba(59,130,246,0.3);">🎬 FFmpeg</span>
+                  </div>
                   <div style="display:flex; align-items:center; gap:13px; font-size: 13.4px; font-weight:700;">
                     <span>&#127916; <span id="sp_ov_res">FHD</span></span>
                     <span>&#128202; <span id="sp_ov_br">0 kbit/s</span></span>
@@ -6936,13 +6985,17 @@ function renderStreamsTable(fromPoll = false) {
     const targetBuf = s.runtime.target_buffer_sec || 30;
     const bMode = s.runtime.buffer_mode || '30s';
 
+    const engBadgeHtml = (engName === 'astrag')
+      ? `<span style="display:inline-block; margin-left:4px; padding:2px 7px; border-radius:99px; font-size:10.2px; font-weight:800; background:rgba(139,92,246,0.16); color:#8b5cf6; border:1px solid rgba(139,92,246,0.35);">⚡ AstraG</span>`
+      : `<span style="display:inline-block; margin-left:4px; padding:2px 7px; border-radius:99px; font-size:10.2px; font-weight:700; background:rgba(59,130,246,0.12); color:#3b82f6; border:1px solid rgba(59,130,246,0.28);">🎬 FFmpeg</span>`;
+
     return `<tr>
       <td><input type="checkbox" class="row-chk" value="${s.name}"></td>
       <td>
         <a class="st-name" onclick="openStreamEditor('${s.name}')">${s.name}</a>
         <div class="st-sub">${s.title || s.name}</div>
         <div class="st-mode">${modeLabel}</div>
-        <div class="st-status-${st}">${st}</div>
+        <div style="display:flex; align-items:center; flex-wrap:wrap; gap:4px; margin-top:2px;"><div class="st-status-${st}">${st}</div>${engBadgeHtml}</div>
       </td>
       <td>
         <div class="inp-top">
@@ -7204,7 +7257,21 @@ function updateStreamPageLiveStats() {
 
   const codecs = s.runtime.codecs || '';
   const engSel = document.getElementById('f_engine');
-  const curEng = (engSel && engSel.value) || s.engine || (s.runtime && s.runtime.engine) || 'ffmpeg';
+  const curEng = (s.runtime && s.runtime.engine) || s.engine || (engSel && engSel.value) || 'ffmpeg';
+  const engBadgeEl = document.getElementById('sp_ov_engine_badge');
+  if (engBadgeEl) {
+    if (curEng === 'astrag') {
+      engBadgeEl.textContent = '⚡ AstraG';
+      engBadgeEl.style.background = 'rgba(139,92,246,0.16)';
+      engBadgeEl.style.color = '#8b5cf6';
+      engBadgeEl.style.borderColor = 'rgba(139,92,246,0.38)';
+    } else {
+      engBadgeEl.textContent = '🎬 FFmpeg';
+      engBadgeEl.style.background = 'rgba(59,130,246,0.14)';
+      engBadgeEl.style.color = '#3b82f6';
+      engBadgeEl.style.borderColor = 'rgba(59,130,246,0.3)';
+    }
+  }
   const is4k = codecs.includes('3840') || codecs.includes('2160');
   const isFhd = codecs.includes('1920') || codecs.includes('1080');
   const isHd = codecs.includes('1280') || codecs.includes('720');
@@ -7230,15 +7297,16 @@ function updateStreamPageLiveStats() {
         const parts = codecs.split('/').map(x => x.trim()).filter(Boolean);
         let inHtml = '', outHtml = '';
         let vIdx = 1, aIdx = 1;
+        const copyTag = (curEng === 'astrag') ? '(AstraG Native)' : '(-c copy)';
         parts.forEach(p => {
             let lower = p.toLowerCase();
             if (lower.match(/\d+x\d+/)) {
                 inHtml += `<span class="mi-track-v" style="margin-bottom:4.3px;">v${vIdx} ${lower}</span>`;
-                outHtml += `<span class="mi-track-v" style="margin-bottom:4.3px;">v${vIdx} ${lower} (Copy)</span>`;
+                outHtml += `<span class="mi-track-v" style="margin-bottom:4.3px;">v${vIdx} ${lower} ${copyTag}</span>`;
                 vIdx++;
             } else {
                 inHtml += `<span class="mi-track-a" style="margin-bottom:4.3px;">a${aIdx} ${lower}</span>`;
-                outHtml += `<span class="mi-track-a" style="margin-bottom:4.3px;">a${aIdx} ${lower} (-c copy)</span>`;
+                outHtml += `<span class="mi-track-a" style="margin-bottom:4.3px;">a${aIdx} ${lower} ${copyTag}</span>`;
                 aIdx++;
             }
         });
