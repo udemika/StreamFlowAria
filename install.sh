@@ -568,6 +568,189 @@ def _is_pes_video_keyframe(packet: bytes, offset: int) -> bool:
     return False
 
 
+class _SPSBitReader:
+    __slots__ = ("data", "byte_offset", "bit_offset")
+
+    def __init__(self, data: bytes):
+        self.data = data
+        self.byte_offset = 0
+        self.bit_offset = 0
+
+    def get_bit(self) -> int:
+        if self.byte_offset >= len(self.data):
+            raise EOFError()
+        res = (self.data[self.byte_offset] >> (7 - self.bit_offset)) & 1
+        self.bit_offset += 1
+        if self.bit_offset == 8:
+            self.bit_offset = 0
+            self.byte_offset += 1
+        return res
+
+    def get_bits(self, n: int) -> int:
+        val = 0
+        for _ in range(n):
+            val = (val << 1) | self.get_bit()
+        return val
+
+    def get_ue(self) -> int:
+        zeros = 0
+        while self.get_bit() == 0:
+            zeros += 1
+            if zeros > 31:
+                raise ValueError("Invalid ue(v)")
+        return (1 << zeros) - 1 + self.get_bits(zeros)
+
+    def get_se(self) -> int:
+        val = self.get_ue()
+        return ((val + 1) >> 1) if (val & 1) else -(val >> 1)
+
+
+def _unescape_rbsp(nal: bytes) -> bytes:
+    out = bytearray()
+    i = 0
+    n = len(nal)
+    while i < n:
+        if i + 2 < n and nal[i] == 0 and nal[i + 1] == 0 and nal[i + 2] == 3:
+            out.append(0)
+            out.append(0)
+            i += 3
+        else:
+            out.append(nal[i])
+            i += 1
+    return bytes(out)
+
+
+def _parse_sps_resolution(packet: bytes, offset: int) -> str:
+    """Extract video resolution (e.g. '1920x1080' or '3840x2160') from H.264/HEVC SPS in a TS packet."""
+    if offset + 9 > 188 or packet[offset:offset + 3] != b"\x00\x00\x01":
+        return ""
+    es_pos = offset + 9 + packet[offset + 8]
+    if es_pos + 6 > 188:
+        return ""
+    payload = packet[es_pos:]
+    idx = 0
+    limit = len(payload) - 5
+    while idx <= limit:
+        sc = payload.find(b"\x00\x00\x01", idx)
+        if sc < 0 or sc + 4 >= len(payload):
+            break
+        nal_start = sc + 3
+        next_sc = payload.find(b"\x00\x00\x01", nal_start)
+        nal_end = next_sc if next_sc >= 0 else len(payload)
+        while nal_end > nal_start and payload[nal_end - 1] == 0:
+            nal_end -= 1
+        nal = payload[nal_start:nal_end]
+        if len(nal) >= 4:
+            b0 = nal[0]
+            if (b0 & 0x80) == 0:
+                if (b0 & 0x1F) == 7:
+                    try:
+                        rbsp = _unescape_rbsp(nal[1:])
+                        br = _SPSBitReader(rbsp)
+                        profile_idc = br.get_bits(8)
+                        br.get_bits(8)
+                        br.get_bits(8)
+                        br.get_ue()
+                        chroma_format_idc = 1
+                        if profile_idc in (100, 110, 122, 244, 44, 83, 86, 118, 128, 138, 139, 134, 135):
+                            chroma_format_idc = br.get_ue()
+                            if chroma_format_idc == 3:
+                                br.get_bit()
+                            br.get_ue()
+                            br.get_ue()
+                            br.get_bit()
+                            if br.get_bit():
+                                for i_sl in range(12 if chroma_format_idc == 3 else 8):
+                                    if br.get_bit():
+                                        sz = 16 if i_sl < 6 else 64
+                                        last_s = 8
+                                        next_s = 8
+                                        for _ in range(sz):
+                                            if next_s != 0:
+                                                next_s = (last_s + br.get_se() + 256) % 256
+                                            last_s = last_s if next_s == 0 else next_s
+                        br.get_ue()
+                        pic_order_cnt_type = br.get_ue()
+                        if pic_order_cnt_type == 0:
+                            br.get_ue()
+                        elif pic_order_cnt_type == 1:
+                            br.get_bit()
+                            br.get_se()
+                            br.get_se()
+                            for _ in range(br.get_ue()):
+                                br.get_se()
+                        br.get_ue()
+                        br.get_bit()
+                        pic_width_in_mbs_minus1 = br.get_ue()
+                        pic_height_in_map_units_minus1 = br.get_ue()
+                        frame_mbs_only_flag = br.get_bit()
+                        if not frame_mbs_only_flag:
+                            br.get_bit()
+                        br.get_bit()
+                        crop_left = crop_right = crop_top = crop_bottom = 0
+                        if br.get_bit():
+                            crop_left = br.get_ue()
+                            crop_right = br.get_ue()
+                            crop_top = br.get_ue()
+                            crop_bottom = br.get_ue()
+                        w = (pic_width_in_mbs_minus1 + 1) * 16
+                        h = (2 - frame_mbs_only_flag) * (pic_height_in_map_units_minus1 + 1) * 16
+                        crop_unit_x = 1 if chroma_format_idc == 0 else (2 if chroma_format_idc in (1, 2) else 1)
+                        crop_unit_y = (2 - frame_mbs_only_flag) * (1 if chroma_format_idc == 0 else (2 if chroma_format_idc == 1 else 1))
+                        w -= (crop_left + crop_right) * crop_unit_x
+                        h -= (crop_top + crop_bottom) * crop_unit_y
+                        if 128 <= w <= 8192 and 96 <= h <= 4320:
+                            return f"{w}x{h}"
+                    except Exception:
+                        pass
+                elif ((b0 >> 1) & 0x3F) == 33 and len(nal) >= 6:
+                    try:
+                        rbsp = _unescape_rbsp(nal[2:])
+                        br = _SPSBitReader(rbsp)
+                        br.get_bits(4)
+                        max_sub_layers_minus1 = br.get_bits(3)
+                        br.get_bit()
+                        br.get_bits(32)
+                        br.get_bits(32)
+                        br.get_bits(32)
+                        sub_layer_profile_present = []
+                        sub_layer_level_present = []
+                        for _ in range(max_sub_layers_minus1):
+                            sub_layer_profile_present.append(br.get_bit())
+                            sub_layer_level_present.append(br.get_bit())
+                        if max_sub_layers_minus1 > 0:
+                            for _ in range(max_sub_layers_minus1, 8):
+                                br.get_bits(2)
+                        for i_sl in range(max_sub_layers_minus1):
+                            if sub_layer_profile_present[i_sl]:
+                                br.get_bits(32)
+                                br.get_bits(32)
+                                br.get_bits(24)
+                            if sub_layer_level_present[i_sl]:
+                                br.get_bits(8)
+                        br.get_ue()
+                        chroma_format_idc = br.get_ue()
+                        if chroma_format_idc == 3:
+                            br.get_bit()
+                        w = br.get_ue()
+                        h = br.get_ue()
+                        if br.get_bit():
+                            conf_left = br.get_ue()
+                            conf_right = br.get_ue()
+                            conf_top = br.get_ue()
+                            conf_bottom = br.get_ue()
+                            sub_w = 2 if chroma_format_idc in (1, 2) else 1
+                            sub_h = 2 if chroma_format_idc == 1 else 1
+                            w -= (conf_left + conf_right) * sub_w
+                            h -= (conf_top + conf_bottom) * sub_h
+                        if 128 <= w <= 8192 and 96 <= h <= 4320:
+                            return f"{w}x{h}"
+                    except Exception:
+                        pass
+        idx = sc + 4
+    return ""
+
+
 def _extract_pcr_from_packet(data: bytes, pos: int):
     """Return (pid, pcr) if the 188-byte TS packet at pos contains a valid 27MHz PCR, else None."""
     if pos + 12 > len(data) or data[pos] != 0x47 or (data[pos + 1] & 0x80):
@@ -722,6 +905,8 @@ class Engine:
         self._audio_track_sel = str(raw_at).strip().lower() if raw_at is not None else "0"
         self._audio_tracks_info = []
         self._video_codec_name = "H264"
+        self._video_resolution = ""
+        self._always_hls = bool(self.stream_options.get("always_hls", False))
         self._selected_audio_pid = None
         self._dropped_audio_pids = set()
         self._segments = OrderedDict()
@@ -861,12 +1046,64 @@ class Engine:
             else:
                 del self._buffer[-need:]
 
+        hls_active = self.is_hls_active()
+
+        # Ultra-low-CPU zero-copy idle monitor path when stream is locked, PSI/video/audio are known,
+        # and no viewers (MPEG-TS, UDP, or active HLS) are currently connected.
+        if (
+            not self._buffer
+            and self._locked
+            and self._seen_video_keyframes
+            and bool(self._elementary_pids)
+            and bool(self._video_resolution)
+            and not self._subscribers
+            and not self._output_states
+            and not hls_active
+            and len(data) >= 188
+            and data[0] == 0x47
+        ):
+            if self._current or self._segments:
+                self._current.clear()
+                self._segments.clear()
+                self._segment_bytes = 0
+                self._current_started = None
+                self._current_pcr = None
+            aligned_len = (len(data) // 188) * 188
+            pkts = aligned_len // 188
+            if pkts > 0:
+                if _valid_header(data, 0) and (pkts == 1 or _valid_header(data, aligned_len - 188)):
+                    dropped_apids = self._dropped_audio_pids
+                    if dropped_apids:
+                        sample_step = max(188, (aligned_len // 16 // 188) * 188)
+                        sampled = 0
+                        kept = 0
+                        for pos_s in range(0, aligned_len, sample_step):
+                            sampled += 1
+                            spid = ((data[pos_s + 1] & 0x1F) << 8) | data[pos_s + 2]
+                            if spid not in dropped_apids:
+                                kept += 1
+                        eff_pkts = max(1, (pkts * kept) // sampled) if sampled else pkts
+                    else:
+                        eff_pkts = pkts
+                    self._counts["packets"] += pkts
+                    self._counts["bytes"] += eff_pkts * 188
+                    for pos_p in range(0, min(aligned_len, 188 * 24), 188):
+                        res_pcr = _extract_pcr_from_packet(data, pos_p)
+                        if res_pcr is not None:
+                            self._observe_pcr(res_pcr[0], res_pcr[1], False)
+                            break
+                    rem = len(data) - aligned_len
+                    if rem > 0:
+                        self._buffer.extend(memoryview(data)[aligned_len:])
+                    return prefix_packets + pkts
+
         # Native C / batch fast path for locked live video streams
         if (
             not self._buffer
             and self._locked
             and self._seen_video_keyframes
-            and bool(self._current)
+            and bool(self._video_resolution)
+            and (bool(self._current) or not hls_active)
             and len(data) >= 188
             and data[0] == 0x47
             and not self._drop_eit
@@ -874,6 +1111,12 @@ class Engine:
             and self._filter_keep_pids is None
             and (_C_TS_LIB is not None or self._hls_seg_boundary_pkts == 0)
         ):
+            if not hls_active and (self._current or self._segments):
+                self._current.clear()
+                self._segments.clear()
+                self._segment_bytes = 0
+                self._current_started = None
+                self._current_pcr = None
             is_hls = self._is_hls_input
             buf = data if isinstance(data, bytearray) else (bytearray(data) if (is_hls or _C_TS_LIB is not None) else data)
             mv = memoryview(buf)
@@ -884,7 +1127,7 @@ class Engine:
                 elem_pids = self._elementary_pids
                 max_seg_bytes = self.max_segment_bytes
                 has_outs = bool(self._subscribers or self._output_states)
-                room = max_seg_bytes - len(self._current)
+                room = (max_seg_bytes - len(self._current)) if hls_active else (len(buf) + 188)
                 run_start = 0
                 packets = 0
                 buf_len = len(buf)
@@ -906,7 +1149,6 @@ class Engine:
                             if dropped_cnt > 0:
                                 packets += dropped_cnt
                                 self._counts["packets"] += dropped_cnt
-                                self._counts["bytes"] += dropped_cnt * 188
                                 rem = buf_len - aligned_len
                                 if rem > 0:
                                     buf[new_aligned:new_aligned + rem] = buf[aligned_len:aligned_len + rem]
@@ -970,9 +1212,9 @@ class Engine:
                     pending_c_pkts = 0
 
                     while pos <= limit:
-                        room_limit = min(limit, run_start + room - 188)
-                        if bool(self._current) and pos <= room_limit:
-                            skip_kf = 0
+                        room_limit = min(limit, run_start + room - 188) if hls_active else limit
+                        if (bool(self._current) or not hls_active) and pos <= room_limit:
+                            skip_kf = 0 if hls_active else 1
                             pcr_pid_arg = self._pcr_pid if self._pcr_pid is not None else -1
                             last_pcr_arg = self._pcr_last if self._pcr_last is not None else -1
                             c_has_audio.value = 0
@@ -1002,12 +1244,21 @@ class Engine:
                                     self._counts["packets"] = base_pkts + ((c_pcr_pos.value - run_start) // 188) + 1
                                     self._observe_pcr(self._pcr_pid, int(c_pcr_val.value), False)
                                 if has_outs:
-                                    for p_off in range(pos, new_pos, 188):
-                                        pkt_b = bytes(mv[p_off:p_off + 188])
-                                        for queue in self._subscribers:
-                                            self._enqueue(queue, pkt_b, "queue_drops")
-                                        for _, _, queue in self._output_states:
-                                            self._enqueue(queue, pkt_b, "output_drops")
+                                    if self._subscribers:
+                                        if self._clock is time.monotonic:
+                                            chunk_b = bytes(mv[pos:new_pos])
+                                            for queue in self._subscribers:
+                                                self._enqueue(queue, chunk_b, "queue_drops")
+                                        else:
+                                            for p_off in range(pos, new_pos, 188):
+                                                pkt_b = bytes(mv[p_off:p_off + 188])
+                                                for queue in self._subscribers:
+                                                    self._enqueue(queue, pkt_b, "queue_drops")
+                                    if self._output_states:
+                                        for p_off in range(pos, new_pos, 188):
+                                            pkt_b = bytes(mv[p_off:p_off + 188])
+                                            for _, _, queue in self._output_states:
+                                                self._enqueue(queue, pkt_b, "output_drops")
                                 packets += (new_pos - pos) // 188
                                 pos = new_pos
                                 if pos > limit:
@@ -1019,10 +1270,11 @@ class Engine:
                             pending_c_pkts += scanned_pkts
                             self._counts["packets"] = base_pkts + scanned_pkts
                             self._counts["bytes"] += span
-                            self._current.extend(mv[run_start:pos])
+                            if hls_active:
+                                self._current.extend(mv[run_start:pos])
                             run_start = pos
                             base_pkts = self._counts["packets"]
-                            room = max_seg_bytes - len(self._current)
+                            room = (max_seg_bytes - len(self._current)) if hls_active else (buf_len + 188)
 
                         if not _valid_header(buf, pos):
                             self._counts["sync_losses"] += 1
@@ -1041,7 +1293,6 @@ class Engine:
                             if skipped_dropped > 0:
                                 packets += skipped_dropped
                                 self._counts["packets"] += skipped_dropped
-                                self._counts["bytes"] += skipped_dropped * 188
                                 run_start = pos
                                 base_pkts = self._counts["packets"]
                                 continue
@@ -1057,7 +1308,7 @@ class Engine:
                         _sync_to_c()
                         run_start = pos
                         base_pkts = self._counts["packets"]
-                        room = max_seg_bytes - len(self._current)
+                        room = (max_seg_bytes - len(self._current)) if hls_active else (buf_len + 188)
 
                     if not sync_lost:
                         if pos > run_start:
@@ -1066,7 +1317,8 @@ class Engine:
                             pending_c_pkts += scanned_pkts
                             self._counts["packets"] = base_pkts + scanned_pkts
                             self._counts["bytes"] += span
-                            self._current.extend(mv[run_start:pos])
+                            if hls_active:
+                                self._current.extend(mv[run_start:pos])
                         if pending_c_pkts > 0:
                             _sync_from_c(pending_c_pkts)
                         if pos < buf_len:
@@ -1265,6 +1517,10 @@ class Engine:
                 if random_access or _is_pes_video_keyframe(packet, offset):
                     is_video_keyframe = True
                     self._seen_video_keyframes = True
+                if pusi and not self._video_resolution:
+                    res_str = _parse_sps_resolution(packet, offset)
+                    if res_str:
+                        self._video_resolution = res_str
 
         if (broken or discontinuity) and pid in self._psi:
             self._psi[pid].reset()
@@ -1278,7 +1534,8 @@ class Engine:
                     packet = rw0[:3] + bytes([(rw0[3] & 0xF0) | (packet[3] & 0x0F)]) + rw0[4:]
         if (pcr is not None or discontinuity) and pid != 0x1FFF and not tei and not duplicate:
             self._observe_pcr(pid, pcr, discontinuity)
-        self._hls_packet(packet, is_video_keyframe, pid)
+        if self.is_hls_active():
+            self._hls_packet(packet, is_video_keyframe, pid)
         if self._subscribers:
             for queue in self._subscribers:
                 self._enqueue(queue, packet, "queue_drops")
@@ -1756,6 +2013,29 @@ class Engine:
             self._segment_bytes -= len(old.data)
             self._evicted_discontinuities += int(old.discontinuity)
 
+    def touch_hls(self):
+        """Mark in-memory HLS segmentation active for an HLS player session."""
+        self._hls_last_access = self._clock()
+
+    def is_hls_active(self) -> bool:
+        """Return True if HLS segments should be assembled in RAM right now."""
+        if self._always_hls or self._clock is not time.monotonic:
+            return True
+        now = self._clock()
+        if self._hls_last_access is not None and (now - self._hls_last_access) <= 20.0:
+            return True
+        if not self._seen_video_keyframes and (now - self._created) < 5.0:
+            return True
+        return False
+
+    def is_video_keyframe_chunk(self, chunk: bytes) -> bool:
+        """Return True if a 188-byte packet or multi-packet chunk contains a video keyframe."""
+        n = (len(chunk) // 188) * 188
+        for pos in range(0, n, 188):
+            if self.is_video_keyframe_packet(chunk[pos:pos + 188]):
+                return True
+        return False
+
     async def wait_for_hls(self, timeout: float = 4.0) -> bool:
         """Wait for complete keyframe-aligned HLS segments to be ready."""
         self._hls_last_access = self._clock()
@@ -1763,6 +2043,7 @@ class Engine:
             return True
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline and self._running:
+            self._hls_last_access = self._clock()
             if len(self._segments) >= 2 or (self._segments and (time.monotonic() - self._created) > 6.0):
                 return True
             await asyncio.sleep(0.05)
@@ -1980,6 +2261,8 @@ class Engine:
                                 chosen = cands[-1] if cands else variants[0]
                             else:
                                 chosen = variants[-1]
+                            if chosen.get("width") and chosen.get("height"):
+                                self._video_resolution = f"{chosen['width']}x{chosen['height']}"
                             best_url = chosen["url"]
                             if best_url and best_url != active_playlist_url:
                                 active_playlist_url = best_url
@@ -2012,10 +2295,11 @@ class Engine:
                     first_load = False
 
                     new_entries = [(u, d) for (u, d) in seg_entries if u not in seen_segments]
-                    if len(new_entries) > 2:
-                        for old_url, _ in new_entries[:-2]:
+                    max_batch = 1 if (not self._subscribers and not self._output_states and not self.is_hls_active() and self._seen_video_keyframes and bool(self._elementary_pids)) else 2
+                    if len(new_entries) > max_batch:
+                        for old_url, _ in new_entries[:-max_batch]:
                             seen_segments[old_url] = True
-                        new_entries = new_entries[-2:]
+                        new_entries = new_entries[-max_batch:]
 
                     for seg_url, seg_dur in new_entries:
                         if not self._running:
@@ -2127,10 +2411,7 @@ class Engine:
                 if not self._subscribers and not self._output_states:
                     self.feed(chunk)
                     del chunk
-                    if len(self._segments) >= 1:
-                        await asyncio.sleep(0.012)
-                    else:
-                        await asyncio.sleep(0)
+                    await asyncio.sleep(0)
                     continue
 
                 mv_chunk = memoryview(chunk)
@@ -2435,17 +2716,30 @@ class _AsyncHttpResponse:
                 await _readexactly_ba(2)
         elif clen_str is not None and clen_str.strip().isdigit():
             rem = int(clen_str.strip())
+            pend = bytearray()
+            min_batch = 188 * 174  # 32,712 bytes (~174 TS packets) to minimize event-loop wakeups
             while rem > 0:
                 step = min(chunk_size, rem)
-                try:
-                    data = await _readexactly_ba(step)
-                except asyncio.IncompleteReadError as exc:
-                    if exc.partial:
-                        yield bytearray(exc.partial)
+                if rbuf:
+                    data = await reader.read(step)
+                else:
+                    data = await asyncio.wait_for(reader.read(step), timeout=timeout)
+                if not data:
+                    if pend:
+                        yield pend
                     can_keepalive = False
                     break
                 rem -= len(data)
-                yield data
+                pend.extend(data)
+                if len(pend) >= min_batch or rem == 0:
+                    aligned = (len(pend) // 188) * 188
+                    if aligned > 0 and rem > 0:
+                        out = bytearray(pend[:aligned])
+                        del pend[:aligned]
+                        yield out
+                    elif rem == 0:
+                        yield pend
+                        pend = bytearray()
             if rem == 0:
                 self._reusable = can_keepalive
         else:
@@ -3155,9 +3449,23 @@ class StreamWorker:
         pushes_cfg = [p.strip() for p in self.cfg.get("pushes", []) if p and p.strip()]
         if not pushes_cfg:
             return
-        m3u8_path = self.ram_dir / "index.m3u8"
-        if not m3u8_path.exists() or len(list(self.ram_dir.glob("seg_*.ts"))) < 1:
-            return
+        is_astrag = (self.cfg.get("engine") == "astrag")
+        if is_astrag:
+            if self.status != "Online" or self.astrag_engine is None:
+                return
+            http_port = self.manager.config_data.get("http_port", 8080)
+            tok = self.cfg.get("token", "").strip()
+            tok_q = f"?token={tok}" if tok else ""
+            input_arg = f"http://127.0.0.1:{http_port}/{self.name}/mpegts{tok_q}"
+            cwd_arg = None
+            pre_in_args = ["-threads", "1", "-probesize", "5000000", "-analyzeduration", "5000000"]
+        else:
+            m3u8_path = self.ram_dir / "index.m3u8"
+            if not m3u8_path.exists() or len(list(self.ram_dir.glob("seg_*.ts"))) < 1:
+                return
+            input_arg = "index.m3u8"
+            cwd_arg = str(self.ram_dir)
+            pre_in_args = ["-threads", "1", "-probesize", "5000000", "-analyzeduration", "5000000", "-re", "-live_start_index", "-2"]
         for push_url in pushes_cfg:
             if push_url in self.push_procs:
                 if self.push_procs[push_url].returncode is not None:
@@ -3178,16 +3486,15 @@ class StreamWorker:
             out_fmt = "mpegts" if target_url.startswith(("udp://", "srt://")) else "flv"
             cmd = [
                 "ffmpeg", "-nostdin", "-hide_banner", "-loglevel", "error",
-                "-threads", "1", "-probesize", "5000000", "-analyzeduration", "5000000",
-                "-re", "-live_start_index", "-2",
-                "-i", "index.m3u8",
+                *pre_in_args,
+                "-i", input_arg,
                 "-map", "0:v:0?", "-map", "0:a?",
                 "-c", "copy",
                 "-f", out_fmt, target_url
             ]
             try:
                 self.push_procs[push_url] = await asyncio.create_subprocess_exec(
-                    *cmd, cwd=str(self.ram_dir),
+                    *cmd, cwd=cwd_arg,
                     stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL
                 )
             except Exception:
@@ -3285,11 +3592,12 @@ class StreamWorker:
                     except Exception:
                         pass
 
-    def _sync_astrag_segments_to_ram(self):
+    def _update_astrag_state(self):
         eng = self.astrag_engine
         if eng is None:
             return
-        if (not getattr(eng, "_segments", None) and
+        if (eng.is_hls_active() and
+                not getattr(eng, "_segments", None) and
                 not getattr(eng, "_seen_video_keyframes", False) and
                 len(getattr(eng, "_current", b"")) >= 188 * 128):
             if (time.monotonic() - getattr(eng, "_created", time.monotonic())) >= 2.0:
@@ -3302,88 +3610,14 @@ class StreamWorker:
         if a_tracks:
             self.detected_audio_tracks = list(a_tracks)
 
-        segs_dict = getattr(eng, "_segments", {})
-        if not segs_dict:
-            return
-        cur_seq = int(getattr(eng, "_sequence", 0))
-        m3u8_final = self.ram_dir / "index.m3u8"
-        if cur_seq == self._last_synced_seq and m3u8_final.exists():
-            return
-        self._last_synced_seq = cur_seq
-
-        self.ram_dir.mkdir(parents=True, exist_ok=True)
-        seg_items = list(segs_dict.items())
-        first_seq = seg_items[0][0]
-        valid_names = set()
-        for grace_seq in range(max(0, first_seq - 4), first_seq):
-            valid_names.add(f"seg_{grace_seq:06d}.ts")
-        m3u8_lines = [
-            "#EXTM3U",
-            "#EXT-X-VERSION:3",
-            f"#EXT-X-TARGETDURATION:{max(1, int(getattr(eng, '_playlist_target', 4)))}",
-            f"#EXT-X-MEDIA-SEQUENCE:{first_seq}",
-            f"#EXT-X-DISCONTINUITY-SEQUENCE:{int(getattr(eng, '_evicted_discontinuities', 0))}",
-        ]
-        total_dur = 0.0
-        dvr_hours = int(self.cfg.get("dvr_hours", 0))
-        for seq, seg in seg_items:
-            fname = f"seg_{seq:06d}.ts"
-            valid_names.add(fname)
-            fpath = self.ram_dir / fname
-            if not fpath.exists():
-                seg_bytes = seg.data if isinstance(seg.data, bytes) else bytes(seg.data)
-                if seg_bytes:
-                    tmp_p = self.ram_dir / f".{fname}.tmp"
-                    try:
-                        tmp_p.write_bytes(seg_bytes)
-                        os.replace(tmp_p, fpath)
-                    except Exception:
-                        pass
-                    if not self.probed_once and fpath.exists():
-                        self.probed_once = True
-                        asyncio.create_task(self._probe_codecs(fpath))
-                    if dvr_hours > 0 and fpath.exists():
-                        ts_int = int(time.time())
-                        day_str = time.strftime("%Y-%m-%d", time.gmtime(ts_int))
-                        target_dir = self.dvr_dir / day_str
-                        target_dir.mkdir(parents=True, exist_ok=True)
-                        target_file = target_dir / f"{ts_int}_{max(1, int(round(seg.duration)))}.ts"
-                        if not target_file.exists():
-                            try:
-                                shutil.copy2(fpath, target_file)
-                            except Exception:
-                                pass
-            if getattr(seg, "discontinuity", False):
-                m3u8_lines.append("#EXT-X-DISCONTINUITY")
-            dur = max(0.2, float(getattr(seg, "duration", 3.0)))
-            total_dur += dur
-            m3u8_lines.append(f"#EXTINF:{dur:.3f},")
-            m3u8_lines.append(fname)
-
-        m3u8_tmp = self.ram_dir / ".index.m3u8.tmp"
-        try:
-            m3u8_tmp.write_text("\n".join(m3u8_lines) + "\n", encoding="utf-8")
-            os.replace(m3u8_tmp, m3u8_final)
-        except Exception:
-            pass
-        try:
-            for entry in os.scandir(self.ram_dir):
-                if entry.name.startswith("seg_") and entry.name.endswith(".ts") and entry.name not in valid_names:
-                    try:
-                        os.unlink(entry.path)
-                    except OSError:
-                        pass
-        except OSError:
-            pass
-        self.cached_buffer_sec = min(self.target_buffer_seconds(), max(1, int(round(total_dur))))
         elem_pids = getattr(eng, "_elementary_pids", {})
-        if elem_pids and (self.codec_info.startswith("Pass-through") or self.codec_info.startswith("ERR:")):
+        if elem_pids:
             v_codec = getattr(eng, "_video_codec_name", "H264")
-            sel_apid = getattr(eng, "_selected_audio_pid", None)
+            v_res = getattr(eng, "_video_resolution", "") or "1920x1080"
             tracks = []
             for pid_k, tname in elem_pids.items():
                 if tname == "VIDEO":
-                    tracks.append(f"{v_codec} 1920x1080")
+                    tracks.append(f"{v_codec} {v_res}")
                 elif tname == "AUDIO":
                     acodec = "AAC"
                     for tr in (a_tracks or []):
@@ -3395,6 +3629,32 @@ class StreamWorker:
                     tracks.append(acodec)
             if tracks:
                 self.codec_info = " / ".join(tracks)
+
+        segs_dict = getattr(eng, "_segments", {})
+        if segs_dict:
+            total_dur = sum(max(0.2, float(getattr(s, "duration", 3.0))) for s in segs_dict.values())
+            self.cached_buffer_sec = min(self.target_buffer_seconds(), max(1, int(round(total_dur))))
+            dvr_hours = int(self.cfg.get("dvr_hours", 0))
+            if dvr_hours > 0:
+                cur_seq = int(getattr(eng, "_sequence", 0))
+                if cur_seq != self._last_synced_seq:
+                    self._last_synced_seq = cur_seq
+                    latest_seg = next(reversed(segs_dict.values()), None)
+                    if latest_seg is not None:
+                        seg_bytes = latest_seg.data if isinstance(latest_seg.data, bytes) else bytes(latest_seg.data)
+                        if seg_bytes:
+                            ts_int = int(time.time())
+                            day_str = time.strftime("%Y-%m-%d", time.gmtime(ts_int))
+                            target_dir = self.dvr_dir / day_str
+                            target_dir.mkdir(parents=True, exist_ok=True)
+                            target_file = target_dir / f"{ts_int}_{max(1, int(round(latest_seg.duration)))}.ts"
+                            if not target_file.exists():
+                                try:
+                                    target_file.write_bytes(seg_bytes)
+                                except Exception:
+                                    pass
+        else:
+            self.cached_buffer_sec = 0
 
     async def _lifecycle_loop(self):
         default_chrome_ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
@@ -3428,7 +3688,6 @@ class StreamWorker:
                     ordered_urls = norm_inputs[self.active_input_idx:] + norm_inputs[:self.active_input_idx]
 
                     shutil.rmtree(self.ram_dir, ignore_errors=True)
-                    self.ram_dir.mkdir(parents=True, exist_ok=True)
                     self.processed_segments.clear()
                     self.probed_once = False
 
@@ -3440,19 +3699,19 @@ class StreamWorker:
                         primary_ua = cfg_ua
                         fallback_ua = "AstraG/2.0"
 
-                    max_segs = 6 if self.cfg.get("buffer_mode") == "normal" else 10
                     try:
                         self.astrag_engine = AstraGEngine(
                             ordered_urls,
                             segment_duration=3.0,
-                            max_segments=max_segs,
+                            max_segments=5,
                             max_segment_bytes=8 * 1024 * 1024,
-                            max_hls_bytes=48 * 1024 * 1024,
+                            max_hls_bytes=24 * 1024 * 1024,
                             stream_options={
                                 "user_agent": primary_ua,
                                 "fallback_user_agent": fallback_ua,
                                 "audio_track": str(self.cfg.get("audio_track", "0")),
                                 "quality": str(self.cfg.get("quality", "best")),
+                                "always_hls": bool(int(self.cfg.get("dvr_hours", 0)) > 0),
                             },
                         )
                         await self.astrag_engine.start()
@@ -3472,12 +3731,14 @@ class StreamWorker:
                         await asyncio.sleep(2.5)
                         continue
 
-                self._sync_astrag_segments_to_ram()
+                self._update_astrag_state()
                 await self._spawn_pushes()
 
-                st = self.astrag_engine.stats() if self.astrag_engine else {}
-                pkts = int(st.get("packets", 0) or 0)
-                in_errs = int(st.get("input_errors", 0) or 0)
+                eng = self.astrag_engine
+                counts = getattr(eng, "_counts", {}) if eng else {}
+                pkts = int(counts.get("packets", 0) or 0)
+                in_errs = int(counts.get("input_errors", 0) or 0)
+                st = eng.stats() if eng else {}
                 raw_bps = float(st.get("effective_bitrate") or st.get("pcr_bitrate") or st.get("bitrate") or 0.0)
                 now_ts = time.time()
 
@@ -3485,7 +3746,7 @@ class StreamWorker:
                     self._last_astrag_pkts = pkts
                     self._last_astrag_pkt_ts = now_ts
                     self.last_segment_time = now_ts
-                    if pkts >= 16 or len(getattr(self.astrag_engine, "_segments", {})) > 0:
+                    if pkts >= 16 or len(getattr(eng, "_segments", {})) > 0:
                         self.status = "Online"
                         self.engine_error = False
                         self.bitrate_in_kbps = max(1, int(round(raw_bps / 1000.0)))
@@ -3498,7 +3759,7 @@ class StreamWorker:
                 stalled_online = (pkts >= 16 and idle_pkt_sec > max(15, cfg_to))
 
                 if failed_connect or stalled_online:
-                    last_err = st.get("last_error") or "AstraG stream error"
+                    last_err = getattr(eng, "_last_error", None) or "AstraG stream error"
                     self.codec_info = f"ERR: {str(last_err)[:55]}"
                     self.status = "Error"
                     self.engine_error = True
@@ -3509,7 +3770,7 @@ class StreamWorker:
                     await asyncio.sleep(2.0)
                     continue
 
-                await asyncio.sleep(0.5)
+                await asyncio.sleep(1.0)
                 continue
 
             if self.astrag_engine is not None:
@@ -3915,7 +4176,20 @@ class StreamManager:
 
                 self.cached_cpu = round(psutil.cpu_percent(interval=None), 1)
                 self.cached_ram = round(psutil.virtual_memory().percent, 1)
-                self.cached_shm_mb = round(psutil.disk_usage(str(RAM_ROOT)).used / (1024 * 1024), 1)
+                shm_bytes = 0
+                if RAM_ROOT.exists():
+                    try:
+                        for sub in os.scandir(RAM_ROOT):
+                            if sub.is_dir(follow_symlinks=False):
+                                for f_ent in os.scandir(sub.path):
+                                    if f_ent.is_file(follow_symlinks=False):
+                                        try:
+                                            shm_bytes += f_ent.stat().st_size
+                                        except OSError:
+                                            pass
+                    except OSError:
+                        pass
+                self.cached_shm_mb = round(shm_bytes / (1024 * 1024), 1)
                 disk_dvr = psutil.disk_usage(str(DVR_ROOT))
                 self.cached_dvr_percent = disk_dvr.percent
                 self.cached_dvr_free_gb = round(disk_dvr.free / (1024 ** 3), 2)
@@ -4002,31 +4276,38 @@ async def admin_auth_middleware(req: web.Request, handler):
     return await handler(req)
 
 
-async def ensure_ondemand_ready(w: StreamWorker) -> bool:
+async def ensure_ondemand_ready(w: StreamWorker, for_hls: bool = True) -> bool:
     w.touch_client()
     m3u8 = w.ram_dir / "index.m3u8"
     for _ in range(45):
         if w.cfg.get("engine") == "astrag" and w.astrag_engine is not None:
-            w._sync_astrag_segments_to_ram()
-            segs_dict = getattr(w.astrag_engine, "_segments", {})
-            if len(segs_dict) >= 1 and m3u8.exists():
-                return True
-            if (not getattr(w.astrag_engine, "_seen_video_keyframes", False) and
-                    int(w.astrag_engine.stats().get("packets", 0)) >= 64 and
-                    len(getattr(w.astrag_engine, "_current", b"")) >= 188 * 32 and
-                    (time.monotonic() - getattr(w.astrag_engine, "_created", time.monotonic())) >= 2.0):
-                try:
-                    w.astrag_engine._finish_segment()
-                    w._sync_astrag_segments_to_ram()
-                except Exception:
-                    pass
-                if m3u8.exists():
+            eng = w.astrag_engine
+            if for_hls:
+                eng.touch_hls()
+                w._update_astrag_state()
+                segs_dict = getattr(eng, "_segments", {})
+                if len(segs_dict) >= 1:
+                    return True
+                if (int(getattr(eng, "_counts", {}).get("packets", 0)) >= 64 and
+                        len(getattr(eng, "_current", b"")) >= 188 * 32 and
+                        (time.monotonic() - getattr(eng, "_created", time.monotonic())) >= 1.5):
+                    try:
+                        eng._finish_segment()
+                        w._update_astrag_state()
+                    except Exception:
+                        pass
+                    if len(getattr(eng, "_segments", {})) >= 1:
+                        return True
+            else:
+                if int(getattr(eng, "_counts", {}).get("packets", 0)) >= 16:
                     return True
         if m3u8.exists():
             segs = list(w.ram_dir.glob("seg_*.ts"))
-            if len(segs) >= PREBUFFER_MIN_SEGS or (w.cfg.get("engine") == "astrag" and len(segs) >= 1):
+            if len(segs) >= PREBUFFER_MIN_SEGS:
                 return True
-        await asyncio.sleep(0.25)
+        await asyncio.sleep(0.20)
+    if w.cfg.get("engine") == "astrag" and w.astrag_engine is not None:
+        return len(getattr(w.astrag_engine, "_segments", {})) >= 1 if for_hls else (int(getattr(w.astrag_engine, "_counts", {}).get("packets", 0)) >= 16)
     return m3u8.exists()
 
 
@@ -4042,9 +4323,25 @@ async def handle_live_hls(req: web.Request) -> web.Response:
     if sess.kicked:
         raise web.HTTPForbidden(text="Session kicked")
 
-    ready = await ensure_ondemand_ready(w)
+    ready = await ensure_ondemand_ready(w, for_hls=True)
     if w.cfg.get("engine") == "astrag" and w.astrag_engine is not None:
-        w._sync_astrag_segments_to_ram()
+        eng = w.astrag_engine
+        eng.touch_hls()
+        w._update_astrag_state()
+        if not getattr(eng, "_segments", None):
+            raise web.HTTPServiceUnavailable(text=f"Stream buffering ({w.codec_info})")
+        content = eng.hls_playlist()
+        token_q = f"?token={req.query['token']}" if "token" in req.query else ""
+        if token_q:
+            content = content.replace(".ts\n", f".ts{token_q}\n")
+        raw_bytes = content.encode("utf-8")
+        sess.bytes_sent += len(raw_bytes)
+        return web.Response(
+            body=raw_bytes,
+            content_type="application/vnd.apple.mpegurl",
+            headers={"Access-Control-Allow-Origin": "*", "Cache-Control": "no-cache"}
+        )
+
     m3u8_file = w.ram_dir / "index.m3u8"
     if not ready or not m3u8_file.exists():
         raise web.HTTPServiceUnavailable(text=f"Stream buffering ({w.codec_info})")
@@ -4070,8 +4367,7 @@ async def handle_ram_media_chunk(req: web.Request) -> web.StreamResponse:
     if not w or "/" in seg_name or "\\" in seg_name or ".." in seg_name:
         raise web.HTTPNotFound()
     w.touch_client()
-    seg_path = w.ram_dir / seg_name
-    if not seg_path.exists() and w.cfg.get("engine") == "astrag" and w.astrag_engine is not None:
+    if w.cfg.get("engine") == "astrag" and w.astrag_engine is not None:
         m_seq = re.search(r"(\d+)\.ts$", seg_name)
         if m_seq:
             raw_seg = w.astrag_engine.get_segment(int(m_seq.group(1)))
@@ -4083,6 +4379,8 @@ async def handle_ram_media_chunk(req: web.Request) -> web.StreamResponse:
                     body=raw_seg,
                     headers={"Content-Type": "video/mp2t", "Access-Control-Allow-Origin": "*", "Cache-Control": "max-age=30"}
                 )
+        raise web.HTTPNotFound()
+    seg_path = w.ram_dir / seg_name
     try:
         file_size = seg_path.stat().st_size
     except FileNotFoundError:
@@ -4105,7 +4403,7 @@ async def handle_http_mpegts(req: web.Request) -> web.StreamResponse:
     if not await MANAGER.check_auth(name, req):
         raise web.HTTPForbidden(text="Auth failed")
 
-    ready = await ensure_ondemand_ready(w)
+    ready = await ensure_ondemand_ready(w, for_hls=False)
     if not ready and not (w.cfg.get("engine") == "astrag" and w.astrag_engine is not None):
         raise web.HTTPServiceUnavailable(text="Stream offline")
 
@@ -4123,7 +4421,7 @@ async def handle_http_mpegts(req: web.Request) -> web.StreamResponse:
     sess = MANAGER.register_session(name, req, "MPEG-TS")
     if w.cfg.get("engine") == "astrag" and w.astrag_engine is not None:
         eng = w.astrag_engine
-        queue = eng.subscribe(4096)
+        queue = eng.subscribe(512)
         try:
             while not queue.empty():
                 stale = queue.get_nowait()
@@ -4135,7 +4433,6 @@ async def handle_http_mpegts(req: web.Request) -> web.StreamResponse:
                     break
             burst_sent = False
             aligned = False
-            audio_pids_aligned = set()
             align_deadline = time.monotonic() + 1.2
             align_packets = 0
             max_align_packets = 4500
@@ -4149,9 +4446,9 @@ async def handle_http_mpegts(req: web.Request) -> web.StreamResponse:
                 if pkt is None:
                     break
                 if not aligned:
-                    align_packets += 1
+                    align_packets += max(1, len(pkt) // 188)
                     has_video = any(t == "VIDEO" for t in getattr(eng, "_elementary_pids", {}).values())
-                    if (not has_video and align_packets >= 16) or eng.is_video_keyframe_packet(pkt) or time.monotonic() >= align_deadline or align_packets >= max_align_packets:
+                    if (not has_video and align_packets >= 16) or eng.is_video_keyframe_chunk(pkt) or time.monotonic() >= align_deadline or align_packets >= max_align_packets:
                         aligned = True
                         burst = eng.bootstrap_burst()
                         out_start = bytearray(burst + pkt) if burst else bytearray(pkt)
@@ -4165,13 +4462,13 @@ async def handle_http_mpegts(req: web.Request) -> web.StreamResponse:
                         await resp.write(burst)
                         sess.bytes_sent += len(burst)
                     burst_sent = True
-                pid = ((pkt[1] & 0x1F) << 8) | pkt[2]
-                if getattr(eng, "_elementary_pids", {}).get(pid) == "AUDIO" and pid not in audio_pids_aligned:
-                    if not (pkt[1] & 0x40):
-                        continue
-                    audio_pids_aligned.add(pid)
+                if queue.empty() and len(pkt) >= 188:
+                    await resp.write(pkt)
+                    sess.bytes_sent += len(pkt)
+                    sess.last_seen = time.time()
+                    continue
                 buf = bytearray(pkt)
-                while len(buf) + 188 <= 32712 and not queue.empty():
+                while len(buf) < 65424 and not queue.empty():
                     nxt = queue.get_nowait()
                     try:
                         queue.task_done()
@@ -4179,11 +4476,6 @@ async def handle_http_mpegts(req: web.Request) -> web.StreamResponse:
                         pass
                     if nxt is None:
                         break
-                    npid = ((nxt[1] & 0x1F) << 8) | nxt[2]
-                    if getattr(eng, "_elementary_pids", {}).get(npid) == "AUDIO" and npid not in audio_pids_aligned:
-                        if not (nxt[1] & 0x40):
-                            continue
-                        audio_pids_aligned.add(npid)
                     buf.extend(nxt)
                 await resp.write(bytes(buf))
                 sess.bytes_sent += len(buf)
@@ -7265,12 +7557,12 @@ function renderStreamsTable(fromPoll = false) {
         <div class="inp-meta">${t('tbl_br')}: <b>${brStr}</b></div>
       </td>
       <td class="muted-cell">
-        <div class="buf-toggle-group">
+        ${engName === 'astrag' ? `<div style="margin-bottom:4px;"><span style="display:inline-flex;align-items:center;gap:4px;padding:2px 7px;border-radius:4px;font-size:10px;font-weight:700;background:rgba(16,185,129,0.12);color:#059669;border:1px solid rgba(16,185,129,0.28);">&#9889; Direct RAM (AstraG)</span></div>` : `<div class="buf-toggle-group">
           <button class="buf-mode-btn ${bMode !== 'normal' ? 'active' : ''}" onclick="setStreamBufferMode('${s.name}', '30s')">${t('buf_30')}</button>
           <button class="buf-mode-btn ${bMode === 'normal' ? 'active' : ''}" onclick="setStreamBufferMode('${s.name}', 'normal')">${t('buf_norm')}</button>
-        </div>
+        </div>`}
         ${st === 'Online' ? `<div style="font-size: 11.2px;margin-top:2px;opacity:0.9;">${s.runtime.codecs}</div>` : ''}
-        ${st === 'Online' ? `<div><span class="buf-pill">${t('buf_label')} ${bufSec}s / ${targetBuf}s</span></div>` : ''}
+        ${st === 'Online' && engName !== 'astrag' ? `<div><span class="buf-pill">${t('buf_label')} ${bufSec}s / ${targetBuf}s</span></div>` : ''}
       </td>
       <td class="muted-cell">${dvrStr}</td>
       <td>
