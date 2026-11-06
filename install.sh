@@ -850,6 +850,7 @@ class Engine:
         self._buffer = bytearray()
         self._locked = False
         self._subscribers = set()
+        self._chunk_subscribers = set()
         self._tasks = []
         self._output_states = []
         self._running = False
@@ -895,6 +896,10 @@ class Engine:
         self._c_out_cc = (ctypes.c_int8 * 8192)(*([-1] * 8192))
         self._c_pid_pkts = (ctypes.c_uint32 * 8192)()
         self._c_last_pos = (ctypes.c_int32 * 8192)(*([-1] * 8192))
+        self._c_has_audio = ctypes.c_int(0)
+        self._c_pcr_val = ctypes.c_int64(-1)
+        self._c_pcr_pos = ctypes.c_int(-1)
+        self._c_synced = False
         self._br_history = []
         self._active_input_id = 1
         self._active_url_opts = {}
@@ -937,7 +942,7 @@ class Engine:
         else:
             self._filter_keep_pids = None
 
-    def subscribe(self, max_queue=None):
+    def subscribe(self, max_queue=None, chunk_mode: bool = False):
         size = self.queue_size if max_queue is None else max_queue
         if size < 1:
             raise ValueError("max_queue must be positive")
@@ -946,6 +951,8 @@ class Engine:
             queue.put_nowait(END_OF_STREAM)
         else:
             self._subscribers.add(queue)
+            if chunk_mode:
+                self._chunk_subscribers.add(queue)
         return queue
 
     @staticmethod
@@ -957,6 +964,7 @@ class Engine:
 
     def unsubscribe(self, queue):
         self._subscribers.discard(queue)
+        self._chunk_subscribers.discard(queue)
         self._close_queue(queue)
 
     def _enqueue(self, queue, packet, counter):
@@ -1007,6 +1015,7 @@ class Engine:
         for queue in self._subscribers:
             self._close_queue(queue)
         self._subscribers.clear()
+        self._chunk_subscribers.clear()
         self._buffer = bytearray()
         self._preroll = bytearray()
         self._locked = False
@@ -1105,10 +1114,11 @@ class Engine:
                     c_out_cc = self._c_out_cc
                     c_pid_pkts = self._c_pid_pkts
                     c_last_pos = self._c_last_pos
-                    c_has_audio = ctypes.c_int(0)
-                    c_pcr_val = ctypes.c_int64(-1)
-                    c_pcr_pos = ctypes.c_int(-1)
+                    c_has_audio = self._c_has_audio
+                    c_pcr_val = self._c_pcr_val
+                    c_pcr_pos = self._c_pcr_pos
                     seg_seen = self._hls_seg_seen_pids
+                    seg_dur_threshold = self.segment_duration * 0.80
 
                     def _sync_to_c():
                         seg_resync = is_hls and self._hls_seg_boundary_pkts > 0
@@ -1128,6 +1138,7 @@ class Engine:
                                 c_last_pos[p] = -1
                             else:
                                 c_pid_flags[p] = 0
+                        self._c_synced = True
 
                     def _sync_from_c(scanned_pkts: int):
                         seg_resync = is_hls and self._hls_seg_boundary_pkts > 0
@@ -1148,7 +1159,8 @@ class Engine:
                         if seg_resync and scanned_pkts > 0:
                             self._hls_seg_boundary_pkts = max(0, self._hls_seg_boundary_pkts - scanned_pkts)
 
-                    _sync_to_c()
+                    if not self._c_synced or (is_hls and self._hls_seg_boundary_pkts > 0):
+                        _sync_to_c()
                     base_pkts = self._counts["packets"]
                     dropped_apids = self._dropped_audio_pids
                     pending_c_pkts = 0
@@ -1156,7 +1168,13 @@ class Engine:
                     while pos <= limit:
                         room_limit = min(limit, run_start + room - 188)
                         if bool(self._current) and pos <= room_limit:
-                            skip_kf = 0
+                            if self._current_pcr is not None and self._timeline > self._current_pcr:
+                                elapsed_seg = self._timeline - self._current_pcr
+                            elif self._current_started is not None:
+                                elapsed_seg = max(0.0, self._clock() - self._current_started)
+                            else:
+                                elapsed_seg = 0.0
+                            skip_kf = 1 if (self._current_has_keyframe and elapsed_seg < seg_dur_threshold) else 0
                             pcr_pid_arg = self._pcr_pid if self._pcr_pid is not None else -1
                             last_pcr_arg = self._pcr_last if self._pcr_last is not None else -1
                             c_has_audio.value = 0
@@ -1189,12 +1207,18 @@ class Engine:
                                 if c_has_audio.value:
                                     self._current_has_audio = True
                                 if has_outs:
-                                    for p_off in range(pos, new_pos, 188):
-                                        pkt_b = bytes(mv[p_off:p_off + 188])
-                                        for queue in self._subscribers:
-                                            self._enqueue(queue, pkt_b, "queue_drops")
-                                        for _, _, queue in self._output_states:
-                                            self._enqueue(queue, pkt_b, "output_drops")
+                                    if self._chunk_subscribers:
+                                        chunk_b = bytes(mv[pos:new_pos])
+                                        for queue in self._chunk_subscribers:
+                                            self._enqueue(queue, chunk_b, "queue_drops")
+                                    pkt_subs = self._subscribers - self._chunk_subscribers if self._chunk_subscribers else self._subscribers
+                                    if pkt_subs or self._output_states:
+                                        for p_off in range(pos, new_pos, 188):
+                                            pkt_b = bytes(mv[p_off:p_off + 188])
+                                            for queue in pkt_subs:
+                                                self._enqueue(queue, pkt_b, "queue_drops")
+                                            for _, _, queue in self._output_states:
+                                                self._enqueue(queue, pkt_b, "output_drops")
                                 if c_pcr_pos.value >= 0:
                                     self._observe_pcr(self._pcr_pid, int(c_pcr_val.value), False)
                                 packets += scanned_c
@@ -1208,6 +1232,7 @@ class Engine:
                         if not _valid_header(buf, pos):
                             self._counts["sync_losses"] += 1
                             self._locked = False
+                            self._c_synced = False
                             sync_lost = True
                             break
 
@@ -1248,7 +1273,7 @@ class Engine:
                             self._counts["packets"] = base_pkts + scanned_pkts
                             self._counts["bytes"] += span
                             self._current.extend(mv[run_start:pos])
-                        if pending_c_pkts > 0:
+                        if pending_c_pkts > 0 and (is_hls and self._hls_seg_boundary_pkts > 0):
                             _sync_from_c(pending_c_pkts)
                         if pos < buf_len:
                             self._buffer.extend(mv[pos:buf_len])
@@ -1798,7 +1823,7 @@ class Engine:
 
     def psi_summary(self) -> dict:
         """Return full Cesbo Astra Analyzer PSI/SI tables and stream metrics."""
-        st = self.stats()
+        st = self.stats(include_pids=False)
         pat_data = self._parsed_pat
         pmt_list = list(self._parsed_pmts.values())
         if not pat_data and self._elementary_pids:
@@ -1906,12 +1931,17 @@ class Engine:
             if len(prefix) + 188 <= self.max_segment_bytes:
                 raw_prefix = self._append_hls_raw(prefix)
                 if self._subscribers or self._output_states:
-                    for p_off in range(0, len(raw_prefix) - 187, 188):
-                        p_pkt = raw_prefix[p_off:p_off + 188]
-                        for queue in self._subscribers:
-                            self._enqueue(queue, p_pkt, "queue_drops")
-                        for _, _, queue in self._output_states:
-                            self._enqueue(queue, p_pkt, "output_drops")
+                    if self._chunk_subscribers and raw_prefix:
+                        for queue in self._chunk_subscribers:
+                            self._enqueue(queue, raw_prefix, "queue_drops")
+                    pkt_subs = self._subscribers - self._chunk_subscribers if self._chunk_subscribers else self._subscribers
+                    if pkt_subs or self._output_states:
+                        for p_off in range(0, len(raw_prefix) - 187, 188):
+                            p_pkt = raw_prefix[p_off:p_off + 188]
+                            for queue in pkt_subs:
+                                self._enqueue(queue, p_pkt, "queue_drops")
+                            for _, _, queue in self._output_states:
+                                self._enqueue(queue, p_pkt, "output_drops")
         else:
             if is_video_keyframe:
                 self._current_has_keyframe = True
@@ -2038,7 +2068,17 @@ class Engine:
             object.__setattr__(segment, "data", bytes(segment.data))
         return segment.data
 
-    def stats(self):
+    def stats(self, include_pids: bool = True):
+        if _C_TS_LIB is not None and self._c_synced:
+            c_flags = self._c_pid_flags
+            c_in_cc = self._c_in_cc
+            c_pkts = self._c_pid_pkts
+            for p, st in self._pids.items():
+                if c_flags[p]:
+                    icc = int(c_in_cc[p])
+                    if icc >= 0:
+                        st["cc"] = icc
+                    st["packets"] = int(c_pkts[p])
         now = self._clock()
         elapsed = max(0.0, now - self._created)
         total_bytes = self._counts["bytes"]
@@ -2060,20 +2100,22 @@ class Engine:
         elif self._pcr_bitrate and self._pcr_bitrate > 0 and elapsed > 2.0:
             effective_bitrate = self._pcr_bitrate
         any_scrambled = any(s.get("scrambled") for s in self._pids.values())
-        return {**self._counts,
-                "cc_errors": self._counts["continuity_errors"],
-                "scrambled": any_scrambled,
-                "input_id": self._active_input_id,
-                "running": self._running, "elapsed": elapsed,
-                "bitrate": avg_bitrate,
-                "effective_bitrate": effective_bitrate,
-                "pcr_bitrate": self._pcr_bitrate, "pcr_pid": self._pcr_pid,
-                "pcr": self._pcr_last, "subscribers": len(self._subscribers),
-                "hls_segments": len(self._segments),
-                "hls_bytes": self._segment_bytes + len(self._current),
-                "last_error": self._last_error,
-                "pids": {pid: {k: v for k, v in state.items() if k != "packet"}
-                         for pid, state in self._pids.items()}}
+        res = {**self._counts,
+               "cc_errors": self._counts["continuity_errors"],
+               "scrambled": any_scrambled,
+               "input_id": self._active_input_id,
+               "running": self._running, "elapsed": elapsed,
+               "bitrate": avg_bitrate,
+               "effective_bitrate": effective_bitrate,
+               "pcr_bitrate": self._pcr_bitrate, "pcr_pid": self._pcr_pid,
+               "pcr": self._pcr_last, "subscribers": len(self._subscribers),
+               "hls_segments": len(self._segments),
+               "hls_bytes": self._segment_bytes + len(self._current),
+               "last_error": self._last_error}
+        if include_pids:
+            res["pids"] = {pid: {k: v for k, v in state.items() if k != "packet"}
+                           for pid, state in self._pids.items()}
+        return res
 
     async def _run_inputs(self):
         prev_input_id = None
@@ -2089,6 +2131,7 @@ class Engine:
                 # A failed source cannot leave half a packet/section for its successor.
                 self._buffer.clear()
                 self._locked = False
+                self._c_synced = False
                 for state in self._pids.values():
                     state["cc"] = None
                     state["packet"] = None
@@ -2280,7 +2323,8 @@ class Engine:
                                 seg_read = 0
                                 first_chunk = True
                                 seg_chunks_buf = []
-                                async for chunk in seg_resp.aiter_bytes(131036):
+                                read_chunk_sz = 131036 if (self._subscribers or self._output_states) else 262072
+                                async for chunk in seg_resp.aiter_bytes(read_chunk_sz):
                                     if not self._running:
                                         return
                                     if not chunk:
@@ -2346,7 +2390,7 @@ class Engine:
                     pass
 
         producer_task = asyncio.create_task(_prefetch_producer())
-        bootstrap_remaining = 1536 * 1024  # Fast-fill initial HLS segment so prefetch queue retains smooth pacing buffer
+        bootstrap_remaining = 512 * 1024  # Fast-fill initial 512 KB so prefetch queue retains ~1.5-2.0s smooth buffer
         slice_bytes = 188 * 174  # 32,712 bytes when live .ts/UDP subscribers exist
         seg_clock = None
         try:
@@ -2362,20 +2406,34 @@ class Engine:
                     self._hls_seg_boundary_pkts = 64
                     self._hls_seg_seen_pids.clear()
 
-                if bootstrap_remaining > 0 and len(self._segments) < 1 and not self._subscribers:
+                if bootstrap_remaining > 0:
                     self.feed(chunk)
                     bootstrap_remaining -= chunk_len
                     del chunk
                     await asyncio.sleep(0)
                     continue
-                bootstrap_remaining = 0
 
-                eff_bps = seg_bps if seg_bps > 0 else ((self._pcr_bitrate / 8.0) if (self._pcr_bitrate and self._pcr_bitrate > 0) else 0.0)
-
-                if not self._subscribers and not self._output_states and len(self._segments) < 2:
+                if not self._subscribers and not self._output_states:
+                    t_pcr_before = self._timeline
                     self.feed(chunk)
                     del chunk
-                    await asyncio.sleep(0)
+                    pcr_delta = self._timeline - t_pcr_before
+                    if 0.0 < pcr_delta <= 0.80:
+                        slice_dur = pcr_delta
+                    elif self._pcr_last is None and seg_bps > 0:
+                        slice_dur = chunk_len / seg_bps
+                    else:
+                        slice_dur = 0.0
+                    now = time.monotonic()
+                    if seg_clock is None or now > seg_clock + 0.30:
+                        seg_clock = now
+                    pace_factor = 0.96 if prefetch_bytes > 1024 * 1024 else (0.99 if prefetch_bytes >= 256 * 1024 else 1.00)
+                    seg_clock += slice_dur * pace_factor
+                    wait = seg_clock - now
+                    if wait >= 0.035:
+                        await asyncio.sleep(wait)
+                    elif wait < -0.35:
+                        seg_clock = now - 0.08
                     continue
 
                 mv_chunk = memoryview(chunk)
@@ -2393,30 +2451,29 @@ class Engine:
                         pos += step
                         pcr_delta = self._timeline - t_pcr_before
 
-                        if eff_bps > 0:
-                            slice_dur = step / eff_bps
-                        elif 0.0 < pcr_delta <= 0.50:
+                        # Hardware PCR clock drives VBR pacing; fallback to segment bitrate only before PCR lock
+                        if 0.0 < pcr_delta <= 0.50:
                             slice_dur = pcr_delta
+                        elif self._pcr_last is None and seg_bps > 0:
+                            slice_dur = step / seg_bps
                         else:
-                            slice_dur = 0.008
+                            slice_dur = 0.0
 
-                        # Smooth PLL pacing: never slower than 1.0x real-time
-                        if prefetch_bytes > 1280 * 1024:
-                            pace_factor = 0.88
-                        elif prefetch_bytes > 640 * 1024:
-                            pace_factor = 0.93
-                        elif prefetch_bytes >= 192 * 1024:
-                            pace_factor = 0.97
-                        else:
+                        # Smooth PLL pacing based on prefetch fullness
+                        if prefetch_bytes > 1024 * 1024:
+                            pace_factor = 0.96
+                        elif prefetch_bytes >= 256 * 1024:
                             pace_factor = 0.99
+                        else:
+                            pace_factor = 1.01
 
                         seg_clock += slice_dur * pace_factor
                         wait = seg_clock - time.monotonic()
-                        if wait > 0.004:
+                        if wait > 0.008:
                             await asyncio.sleep(wait)
                         else:
-                            if wait < -0.30:
-                                seg_clock = time.monotonic() - 0.10
+                            if wait < -0.35:
+                                seg_clock = time.monotonic() - 0.08
                             await asyncio.sleep(0)
                 finally:
                     mv_chunk.release()
@@ -2461,7 +2518,11 @@ class Engine:
                     switch_to_hls = True
                 else:
                     first_chunk = True
-                    async for chunk in response.aiter_bytes(65424):
+                    ts_clock = None
+                    bootstrap_rem = 384 * 1024
+                    slice_sz = 188 * 174
+                    read_sz = 131036 if (self._subscribers or self._output_states) else 262072
+                    async for chunk in response.aiter_bytes(read_sz):
                         if not self._running or not chunk:
                             break
                         if first_chunk:
@@ -2469,9 +2530,35 @@ class Engine:
                             if chunk.lstrip().startswith(b"#EXTM3U"):
                                 switch_to_hls = True
                                 break
-                        self.feed(chunk)
-                        del chunk
-                        await asyncio.sleep(0)
+                        if bootstrap_rem > 0 or (not self._subscribers and not self._output_states):
+                            self.feed(chunk)
+                            if bootstrap_rem > 0:
+                                bootstrap_rem -= len(chunk)
+                            del chunk
+                            continue
+                        mv_c = memoryview(chunk)
+                        try:
+                            pos = 0
+                            clen = len(chunk)
+                            now = time.monotonic()
+                            if ts_clock is None or now > ts_clock + 0.25:
+                                ts_clock = now
+                            while pos < clen and self._running:
+                                step = min(slice_sz, clen - pos)
+                                t_before = self._timeline
+                                self.feed(mv_c[pos:pos + step])
+                                pos += step
+                                pcr_d = self._timeline - t_before
+                                if 0.0 < pcr_d <= 0.25:
+                                    ts_clock += pcr_d * 0.94
+                                    wait = ts_clock - time.monotonic()
+                                    if 0.004 < wait <= 0.12:
+                                        await asyncio.sleep(wait)
+                                    elif wait < -0.25:
+                                        ts_clock = time.monotonic()
+                        finally:
+                            mv_c.release()
+                            del chunk
             if switch_to_hls and self._running:
                 await self._stream_hls_playlist(client, resolved_hls_url)
 
@@ -2624,58 +2711,96 @@ class _AsyncHttpResponse:
         reader = self._reader
         rbuf = getattr(reader, "_buffer", None)
         transport = self._writer.transport if self._writer is not None else None
+        ssl_proto = getattr(transport, "_ssl_protocol", None) if transport is not None else None
+        raw_tr = getattr(ssl_proto, "_transport", None) if ssl_proto is not None else transport
         host = self._pool_key[1] if isinstance(self._pool_key, tuple) and len(self._pool_key) > 1 else ""
         is_remote = host not in ("127.0.0.1", "localhost", "::1", "")
+        coalesce_window = 0.095 if chunk_size >= 200000 else 0.045
 
-        async def _readexactly_ba(n: int) -> bytearray:
+        def _pause_raw():
+            if raw_tr is not None:
+                try:
+                    raw_tr.pause_reading()
+                except Exception:
+                    pass
+
+        def _resume_raw():
+            if raw_tr is not None:
+                try:
+                    raw_tr.resume_reading()
+                except Exception:
+                    pass
+
+        async def _wait_coalesced():
+            if is_remote and raw_tr is not None and not reader.at_eof():
+                _pause_raw()
+                try:
+                    await asyncio.sleep(coalesce_window)
+                finally:
+                    _resume_raw()
+            if not rbuf and not reader.at_eof():
+                await asyncio.wait_for(reader._wait_for_data("read"), timeout=timeout)
+
+        async def _fill_at_least(min_bytes: int):
+            if len(rbuf) >= min_bytes:
+                return
+            deadline = time.monotonic() + timeout
+            while len(rbuf) < min_bytes:
+                if reader.at_eof():
+                    partial = bytes(rbuf)
+                    rbuf.clear()
+                    raise asyncio.IncompleteReadError(partial, min_bytes)
+                if not rbuf:
+                    if is_remote and min_bytes >= 8192:
+                        await _wait_coalesced()
+                    else:
+                        await asyncio.wait_for(reader._wait_for_data("read"), timeout=timeout)
+                else:
+                    if time.monotonic() > deadline:
+                        raise asyncio.TimeoutError()
+                    if is_remote and (min_bytes - len(rbuf)) >= 16384:
+                        await _wait_coalesced()
+                    else:
+                        await reader._wait_for_data("read")
+
+        async def _readuntil_crlf() -> bytes:
             if rbuf is not None:
-                if len(rbuf) < n:
-                    deadline = time.monotonic() + timeout
-                    while len(rbuf) < n:
-                        if reader.at_eof():
-                            partial = bytes(rbuf)
-                            rbuf.clear()
-                            raise asyncio.IncompleteReadError(partial, n)
-                        if not rbuf:
-                            await asyncio.wait_for(reader._wait_for_data("readexactly"), timeout=timeout)
-                        else:
-                            if time.monotonic() > deadline:
-                                raise asyncio.TimeoutError()
-                            await reader._wait_for_data("readexactly")
-                out = bytearray(rbuf[:n])
-                del rbuf[:n]
-                reader._maybe_resume_transport()
-                return out
-            return bytearray(await asyncio.wait_for(reader.readexactly(n), timeout=timeout))
+                idx = rbuf.find(b"\r\n")
+                if idx != -1:
+                    end = idx + 2
+                    line = bytes(rbuf[:end])
+                    del rbuf[:end]
+                    reader._maybe_resume_transport()
+                    return line
+            return await asyncio.wait_for(reader.readuntil(b"\r\n"), timeout=timeout)
 
-        async def _readuntil(sep: bytes) -> bytes:
-            if rbuf is not None and sep in rbuf:
-                return await reader.readuntil(sep)
-            return await asyncio.wait_for(reader.readuntil(sep), timeout=timeout)
-
-        if "chunked" in te:
-            buf = bytearray()
-            while True:
-                line = await _readuntil(b"\r\n")
-                size_str = line[:-2].split(b";", 1)[0].strip()
-                size = int(size_str, 16)
-                if size == 0:
-                    while True:
-                        tr = await _readuntil(b"\r\n")
-                        if tr in (b"\r\n", b"\n", b""):
-                            break
-                    self._reusable = can_keepalive
-                    if buf:
-                        yield buf
-                    break
-                rem = size
-                emit_thresh = min(chunk_size, 188 * 87)
-                while rem > 0:
-                    step = min(chunk_size, rem)
-                    data = await _readexactly_ba(step)
-                    rem -= len(data)
-                    if data:
-                        buf.extend(data)
+        try:
+            if "chunked" in te:
+                buf = bytearray()
+                emit_thresh = min(chunk_size, 188 * 174)
+                while True:
+                    if rbuf is not None:
+                        while True:
+                            idx = rbuf.find(b"\r\n")
+                            if idx == -1:
+                                break
+                            semi = rbuf.find(b";", 0, idx)
+                            end_sz = semi if semi != -1 else idx
+                            size = int(bytes(rbuf[:end_sz]).strip(), 16)
+                            if size == 0:
+                                break
+                            total_frame = idx + 2 + size + 2
+                            if len(rbuf) < total_frame:
+                                break
+                            mv_r = memoryview(rbuf)
+                            try:
+                                buf.extend(mv_r[idx + 2:idx + 2 + size])
+                            finally:
+                                mv_r.release()
+                            del rbuf[:total_frame]
+                            reader._maybe_resume_transport()
+                            if len(buf) >= chunk_size:
+                                break
                         if len(buf) >= emit_thresh:
                             aligned_c = (len(buf) // 188) * 188
                             if aligned_c > 0:
@@ -2686,60 +2811,134 @@ class _AsyncHttpResponse:
                                     out_c = bytearray(buf[:aligned_c])
                                     del buf[:aligned_c]
                                     yield out_c
-                await _readexactly_ba(2)
-        elif clen_str is not None and clen_str.strip().isdigit():
-            rem = int(clen_str.strip())
-            while rem > 0:
-                step = min(chunk_size, rem)
-                try:
-                    data = await _readexactly_ba(step)
-                except asyncio.IncompleteReadError as exc:
-                    if exc.partial:
-                        yield bytearray(exc.partial)
-                    can_keepalive = False
-                    break
-                rem -= len(data)
-                yield data
-            if rem == 0:
-                self._reusable = can_keepalive
-        else:
-            pend = bytearray()
-            min_batch = 188 * 87  # 16,356 bytes (~87 TS packets) to minimize event-loop wakeups
-            first_yield = True
-            while True:
-                if rbuf:
-                    data = await reader.read(chunk_size)
-                else:
-                    data = await asyncio.wait_for(reader.read(chunk_size), timeout=timeout)
-                if not data:
-                    if pend:
-                        yield pend
-                    break
-                pend.extend(data)
-                if first_yield and pend.lstrip().startswith(b"#EXTM3U"):
-                    first_yield = False
-                    yield pend
-                    pend = bytearray()
-                    continue
-                while len(pend) < min_batch and rbuf:
-                    more = await reader.read(chunk_size - len(pend))
-                    if not more:
+
+                    line = await _readuntil_crlf()
+                    size_str = line[:-2].split(b";", 1)[0].strip()
+                    size = int(size_str, 16)
+                    if size == 0:
+                        while True:
+                            tr = await _readuntil_crlf()
+                            if tr in (b"\r\n", b"\n", b""):
+                                break
+                        self._reusable = can_keepalive
+                        if buf:
+                            yield buf
                         break
-                    pend.extend(more)
-                if len(pend) >= min_batch or reader.at_eof():
-                    first_yield = False
-                    aligned = (len(pend) // 188) * 188
-                    if aligned > 0:
-                        if aligned == len(pend):
+                    rem = size
+                    while rem > 0:
+                        step = min(chunk_size, rem)
+                        if rbuf is not None:
+                            await _fill_at_least(step)
+                            mv_r = memoryview(rbuf)
+                            try:
+                                buf.extend(mv_r[:step])
+                            finally:
+                                mv_r.release()
+                            del rbuf[:step]
+                            reader._maybe_resume_transport()
+                            rem -= step
+                        else:
+                            data = await asyncio.wait_for(reader.readexactly(step), timeout=timeout)
+                            rem -= len(data)
+                            buf.extend(data)
+                        if len(buf) >= emit_thresh:
+                            aligned_c = (len(buf) // 188) * 188
+                            if aligned_c > 0:
+                                if aligned_c == len(buf):
+                                    yield buf
+                                    buf = bytearray()
+                                else:
+                                    out_c = bytearray(buf[:aligned_c])
+                                    del buf[:aligned_c]
+                                    yield out_c
+                    if rbuf is not None:
+                        await _fill_at_least(2)
+                        del rbuf[:2]
+                        reader._maybe_resume_transport()
+                    else:
+                        await asyncio.wait_for(reader.readexactly(2), timeout=timeout)
+            elif clen_str is not None and clen_str.strip().isdigit():
+                rem = int(clen_str.strip())
+                min_emit = min(chunk_size, 188 * 348)
+                while rem > 0:
+                    target = min(chunk_size, rem)
+                    wait_min = min(rem, min_emit)
+                    try:
+                        if rbuf is not None:
+                            await _fill_at_least(wait_min)
+                            take = min(target, len(rbuf))
+                            if take > 188 and take < rem:
+                                aligned_take = (take // 188) * 188
+                                if aligned_take > 0:
+                                    take = aligned_take
+                            out = bytearray(rbuf[:take])
+                            del rbuf[:take]
+                            reader._maybe_resume_transport()
+                        else:
+                            out = bytearray(await asyncio.wait_for(reader.readexactly(target), timeout=timeout))
+                    except asyncio.IncompleteReadError as exc:
+                        if exc.partial:
+                            yield bytearray(exc.partial)
+                        can_keepalive = False
+                        break
+                    rem -= len(out)
+                    yield out
+                if rem == 0:
+                    self._reusable = can_keepalive
+            else:
+                min_batch = min(chunk_size, 188 * 348)
+                first_yield = True
+                if rbuf is not None:
+                    while True:
+                        while len(rbuf) < min_batch and not reader.at_eof():
+                            if first_yield and len(rbuf) >= 7 and rbuf[:64].lstrip().startswith(b"#EXTM3U"):
+                                break
+                            await _wait_coalesced()
+                        if not rbuf and reader.at_eof():
+                            break
+                        if first_yield and rbuf[:64].lstrip().startswith(b"#EXTM3U"):
+                            first_yield = False
+                            out = bytearray(rbuf)
+                            rbuf.clear()
+                            reader._maybe_resume_transport()
+                            yield out
+                            continue
+                        first_yield = False
+                        avail = min(len(rbuf), chunk_size)
+                        aligned = (avail // 188) * 188
+                        if aligned > 0:
+                            out = bytearray(rbuf[:aligned])
+                            del rbuf[:aligned]
+                            reader._maybe_resume_transport()
+                            yield out
+                        elif reader.at_eof() and rbuf:
+                            out = bytearray(rbuf)
+                            rbuf.clear()
+                            yield out
+                            break
+                else:
+                    pend = bytearray()
+                    while True:
+                        data = await asyncio.wait_for(reader.read(chunk_size), timeout=timeout)
+                        if not data:
+                            if pend:
+                                yield pend
+                            break
+                        pend.extend(data)
+                        if first_yield and pend.lstrip().startswith(b"#EXTM3U"):
+                            first_yield = False
                             yield pend
                             pend = bytearray()
-                        else:
-                            out = bytearray(pend[:aligned])
-                            del pend[:aligned]
-                            yield out
-                    elif reader.at_eof() and pend:
-                        yield pend
-                        pend = bytearray()
+                            continue
+                        if len(pend) >= min_batch or reader.at_eof():
+                            first_yield = False
+                            aligned = (len(pend) // 188) * 188
+                            if aligned > 0:
+                                out = bytearray(pend[:aligned])
+                                del pend[:aligned]
+                                yield out
+        finally:
+            _resume_raw()
 
     async def aclose(self):
         if self._closed:
@@ -2759,6 +2958,10 @@ class _AsyncHttpResponse:
 
     async def __aexit__(self, *_):
         await self.aclose()
+
+
+_SHARED_IO_BUF = bytearray(524288)
+_SHARED_IO_MV = memoryview(_SHARED_IO_BUF)
 
 
 class _AsyncHttpClient:
@@ -2808,9 +3011,34 @@ class _AsyncHttpClient:
             self._close_writer(writer)
         ssl_ctx = self._get_ssl_context() if scheme == "https" else None
         reader, writer = await asyncio.wait_for(
-            asyncio.open_connection(host, port, ssl=ssl_ctx, limit=256 * 1024),
+            asyncio.open_connection(host, port, ssl=ssl_ctx, limit=512 * 1024),
             timeout=self.connect_timeout,
         )
+        try:
+            sock = writer.get_extra_info("socket")
+            if sock is not None:
+                sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 1024 * 1024)
+            tr = writer.transport
+            proto = getattr(tr, "_protocol", None)
+            rbuf = getattr(reader, "_buffer", None)
+            if proto is not None and rbuf is not None:
+                def _get_buf(sizehint):
+                    return _SHARED_IO_MV
+                def _buf_updated(nbytes):
+                    if nbytes > 0:
+                        rbuf.extend(_SHARED_IO_MV[:nbytes])
+                        reader._wakeup_waiter()
+                        if len(rbuf) > 2 * reader._limit and not reader._paused:
+                            reader._paused = True
+                            reader._transport.pause_reading()
+                proto.get_buffer = _get_buf
+                proto.buffer_updated = _buf_updated
+                ssl_proto = getattr(tr, "_ssl_protocol", None)
+                if ssl_proto is not None and hasattr(ssl_proto, "_app_protocol_get_buffer"):
+                    ssl_proto._app_protocol_get_buffer = _get_buf
+                    ssl_proto._app_protocol_buffer_updated = _buf_updated
+        except Exception:
+            pass
         return key, reader, writer, False
 
     async def _send_and_read_headers(self, method: str, url: str):
@@ -3695,7 +3923,7 @@ class StreamWorker:
                 counts = getattr(eng, "_counts", {}) if eng else {}
                 pkts = int(counts.get("packets", 0) or 0)
                 in_errs = int(counts.get("input_errors", 0) or 0)
-                st = eng.stats() if eng else {}
+                st = eng.stats(include_pids=False) if eng else {}
                 raw_bps = float(st.get("effective_bitrate") or st.get("pcr_bitrate") or st.get("bitrate") or 0.0)
                 now_ts = time.time()
 
@@ -4387,7 +4615,7 @@ async def handle_http_mpegts(req: web.Request) -> web.StreamResponse:
     sess = MANAGER.register_session(name, req, "MPEG-TS")
     if w.cfg.get("engine") == "astrag" and w.astrag_engine is not None:
         eng = w.astrag_engine
-        queue = eng.subscribe(6144)
+        queue = eng.subscribe(512, chunk_mode=True)
         prebuffer_parts = eng.get_mpegts_prebuffer_parts()
         try:
             while not queue.empty():
@@ -8439,6 +8667,11 @@ After=network.target
 Type=simple
 User=root
 WorkingDirectory=/opt/flustream
+Environment="PYTHONUNBUFFERED=1"
+Environment="PYTHONDONTWRITEBYTECODE=1"
+Environment="MALLOC_MMAP_THRESHOLD_=131072"
+Environment="MALLOC_TRIM_THRESHOLD_=131072"
+Environment="MALLOC_ARENA_MAX=2"
 ExecStart=/opt/flustream/venv/bin/python /opt/flustream/server.py
 KillMode=control-group
 Restart=always
