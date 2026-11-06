@@ -1428,11 +1428,13 @@ class Engine:
                         pcr = base * 300 + ext
                     else:
                         self._counts["malformed"] += 1
-                # Suppress benign segment-boundary discontinuity flags on HLS inputs
-                # when the 27MHz PCR timeline is continuous (prevents VLC decoder/window resets)
-                if discontinuity and self._is_hls_input:
-                    if self._pcr_last is None or (
-                        pcr is not None and 0 <= (pcr - self._pcr_last) % PCR_WRAP <= PCR_HZ * 5
+                # Suppress benign segment-boundary discontinuity flags on live inputs
+                # when the 27MHz PCR timeline is continuous (prevents VLC/TiviMate decoder resets)
+                if discontinuity and (self._is_hls_input or self._clock is time.monotonic):
+                    if self._pcr_last is None or pcr is None or (
+                        0 <= (pcr - self._pcr_last) % PCR_WRAP <= PCR_HZ * 15
+                    ) or (
+                        0 <= (self._pcr_last - pcr) % PCR_WRAP <= PCR_HZ * 5
                     ):
                         discontinuity = False
                         packet = packet[:5] + bytes([flags & 0x7F]) + packet[6:]
@@ -1573,6 +1575,10 @@ class Engine:
         if pid != self._pcr_pid:
             return
         if discontinuity and self._pcr_last is not None:
+            if self._clock is time.monotonic:
+                self._pcr_last = pcr
+                self._pcr_index = self._counts["packets"]
+                return
             self._break_timeline()
         if pcr is None:
             return
@@ -1580,6 +1586,13 @@ class Engine:
         if self._pcr_last is not None:
             delta = (pcr - self._pcr_last) % PCR_WRAP
             if delta > PCR_HZ * 60:
+                if self._clock is time.monotonic:
+                    back_delta = (self._pcr_last - pcr) % PCR_WRAP
+                    if back_delta <= PCR_HZ * 5:
+                        return
+                    self._pcr_last = pcr
+                    self._pcr_index = index
+                    return
                 self._break_timeline()
             elif delta:
                 self._timeline += delta / PCR_HZ
@@ -2046,11 +2059,11 @@ class Engine:
         self._current_has_audio = False
         self._current_discontinuity = False
         hls_hot = self.is_hls_active()
-        eff_max_segs = self.max_segments if hls_hot else min(self.max_segments, 3)
-        eff_max_bytes = self.max_hls_bytes if hls_hot else min(self.max_hls_bytes, 10 * 1024 * 1024)
+        eff_max_segs = self.max_segments if hls_hot else min(self.max_segments, 4)
+        eff_max_bytes = self.max_hls_bytes if hls_hot else min(self.max_hls_bytes, 20 * 1024 * 1024)
         evicted_any = False
         while (len(self._segments) > eff_max_segs or
-               (len(self._segments) > 2 and self._segment_bytes > eff_max_bytes)):
+               (len(self._segments) > 3 and self._segment_bytes > eff_max_bytes)):
             _, old = self._segments.popitem(last=False)
             self._segment_bytes -= len(old.data)
             self._evicted_discontinuities += int(old.discontinuity)
@@ -2223,18 +2236,35 @@ class Engine:
                 await asyncio.sleep(self.retry_delay)
 
     async def _stream_hls_playlist(self, client, playlist_url: str):
-        """Cesbo Astra sync_buffer HLS input: low-RAM streaming chunk prefetcher + PCR-locked VBR pacer."""
+        """Cesbo Astra sync_buffer HLS input: jitter-resistant prefetcher + PCR/bitrate hybrid pacer."""
         self._is_hls_input = True
         seen_segments = OrderedDict()
-        prefetch_queue: asyncio.Queue = asyncio.Queue(maxsize=48)
+        prefetch_queue: asyncio.Queue = asyncio.Queue(maxsize=256)
         prefetch_bytes = 0
-        max_prefetch_bytes = 2 * 1024 * 1024  # 2 MB streaming chunk cap per stream
+        max_prefetch_bytes = 24 * 1024 * 1024  # 24 MB prefetch cushion per HLS stream for 4K stability
         max_single_seg_bytes = 64 * 1024 * 1024  # Support up to 64 MB 4K segments
         producer_error = None
 
         master_url = playlist_url
         active_playlist_url = playlist_url
         seg_failures = OrderedDict()
+
+        def _seg_canon_key(u: str) -> str:
+            path = urlsplit(u).path.rstrip("/")
+            parts = [p for p in path.split("/") if p]
+            if not parts:
+                return u
+            leaf = parts[-1]
+            if leaf.lower() in ("index.ts", "chunk.ts", "seg.ts", "media.ts", "stream.ts", "video.ts") and len(parts) >= 2:
+                return f"{parts[-2]}/{leaf}"
+            return leaf
+
+        def _mark_seen(u: str):
+            seen_segments[u] = True
+            seen_segments[_seg_canon_key(u)] = True
+
+        def _is_seen(u: str) -> bool:
+            return (u in seen_segments) or (_seg_canon_key(u) in seen_segments)
 
         async def _prefetch_producer():
             nonlocal active_playlist_url, producer_error, prefetch_bytes
@@ -2244,9 +2274,10 @@ class Engine:
             try:
                 while self._running:
                     while self._running and prefetch_bytes >= max_prefetch_bytes:
-                        await asyncio.sleep(0.08)
+                        await asyncio.sleep(0.06)
                     if not self._running:
                         return
+                    t_poll_start = time.monotonic()
                     try:
                         resp = await client.get(active_playlist_url)
                         if resp.status_code in (401, 403) and first_load:
@@ -2376,25 +2407,26 @@ class Engine:
                             seg_seq += 1
                             next_dur = None
 
-                    if first_load and len(seg_entries) > 2:
-                        for old_url, _, _, _ in seg_entries[:-2]:
-                            seen_segments[old_url] = True
+                    init_keep = 3 if target_duration <= 6.0 else 2
+                    if first_load and len(seg_entries) > init_keep:
+                        for old_url, _, _, _ in seg_entries[:-init_keep]:
+                            _mark_seen(old_url)
 
-                    new_entries = [e for e in seg_entries if e[0] not in seen_segments]
-                    if first_load and len(new_entries) > 2:
-                        for old_url, _, _, _ in new_entries[:-2]:
-                            seen_segments[old_url] = True
-                        new_entries = new_entries[-2:]
+                    new_entries = [e for e in seg_entries if not _is_seen(e[0])]
+                    if first_load and len(new_entries) > init_keep:
+                        for old_url, _, _, _ in new_entries[:-init_keep]:
+                            _mark_seen(old_url)
+                        new_entries = new_entries[-init_keep:]
                     elif not first_load and len(new_entries) > 4:
                         for old_url, _, _, _ in new_entries[:-3]:
-                            seen_segments[old_url] = True
+                            _mark_seen(old_url)
                         new_entries = new_entries[-3:]
                     first_load = False
 
                     for seg_url, seg_dur, seg_key_uri, seg_iv in new_entries:
                         if not self._running:
                             return
-                        while len(seen_segments) > 120:
+                        while len(seen_segments) > 240:
                             seen_segments.popitem(last=False)
                         while len(seg_failures) > 120:
                             seg_failures.popitem(last=False)
@@ -2413,11 +2445,13 @@ class Engine:
                             async with client.stream("GET", seg_url) as seg_resp:
                                 seg_resp.raise_for_status()
                                 clen = int(seg_resp.headers.get("content-length") or 0)
-                                seg_bps = (clen / seg_dur) if (clen >= 188 and seg_dur > 0) else 0.0
+                                seg_bps = (clen / seg_dur) if (clen >= 188 and seg_dur > 0) else (
+                                    (self._pcr_bitrate / 8.0) if (self._pcr_bitrate and self._pcr_bitrate > 0) else 0.0
+                                )
                                 seg_read = 0
                                 first_chunk = True
                                 seg_chunks_buf = []
-                                read_chunk_sz = 131036 if (self._subscribers or self._output_states) else 262072
+                                read_chunk_sz = 131036
                                 if key_bytes is not None:
                                     enc_parts = bytearray()
                                     async for chunk in seg_resp.aiter_bytes(read_chunk_sz):
@@ -2431,11 +2465,11 @@ class Engine:
                                     dec_bytes = _aes128_cbc_decrypt(bytes(enc_parts), key_bytes, seg_iv)
                                     del enc_parts
                                     seg_read = len(dec_bytes)
-                                    calc_bps = seg_bps if seg_bps > 0 else ((seg_read / max(0.5, seg_dur)) if seg_dur > 0 else 0.0)
+                                    calc_bps = (seg_read / max(0.5, seg_dur)) if seg_dur > 0 else seg_bps
                                     for pos in range(0, seg_read, read_chunk_sz):
                                         c_bytes = dec_bytes[pos:pos + read_chunk_sz]
                                         while self._running and prefetch_bytes >= max_prefetch_bytes:
-                                            await asyncio.sleep(0.05)
+                                            await asyncio.sleep(0.04)
                                         if not self._running:
                                             return
                                         prefetch_bytes += len(c_bytes)
@@ -2457,7 +2491,7 @@ class Engine:
                                         seg_read += len(chunk)
                                         if seg_bps > 0:
                                             while self._running and prefetch_bytes >= max_prefetch_bytes:
-                                                await asyncio.sleep(0.05)
+                                                await asyncio.sleep(0.04)
                                             if not self._running:
                                                 return
                                             prefetch_bytes += len(chunk)
@@ -2468,27 +2502,27 @@ class Engine:
                                         calc_bps = (seg_read / max(0.5, seg_dur)) if seg_dur > 0 else 0.0
                                         for c_bytes, c_start in seg_chunks_buf:
                                             while self._running and prefetch_bytes >= max_prefetch_bytes:
-                                                await asyncio.sleep(0.05)
+                                                await asyncio.sleep(0.04)
                                             if not self._running:
                                                 return
                                             prefetch_bytes += len(c_bytes)
                                             await prefetch_queue.put((c_bytes, seg_dur, calc_bps, c_start))
                                         seg_chunks_buf.clear()
                                 if seg_read >= 188:
-                                    seen_segments[seg_url] = True
+                                    _mark_seen(seg_url)
                                     consecutive_errors = 0
                                 else:
                                     fails = seg_failures.get(seg_url, 0) + 1
                                     seg_failures[seg_url] = fails
                                     if fails >= 3:
-                                        seen_segments[seg_url] = True
+                                        _mark_seen(seg_url)
                         except asyncio.CancelledError:
                             raise
                         except Exception as exc:
                             fails = seg_failures.get(seg_url, 0) + 1
                             seg_failures[seg_url] = fails
                             if fails >= 2:
-                                seen_segments[seg_url] = True
+                                _mark_seen(seg_url)
                             consecutive_errors += 1
                             self._counts["input_errors"] += 1
                             self._last_error = f"{type(exc).__name__}: {exc}"
@@ -2496,10 +2530,15 @@ class Engine:
                                 producer_error = exc
                                 return
 
+                    poll_elapsed = time.monotonic() - t_poll_start
                     if new_entries:
-                        poll_sleep = min(1.8, max(0.8, target_duration * 0.38))
+                        desired = min(2.0, max(0.5, target_duration * 0.35))
+                        poll_sleep = max(0.05, desired - poll_elapsed)
                     else:
-                        poll_sleep = min(1.0, max(0.45, target_duration * 0.22))
+                        desired = min(1.0, max(0.35, target_duration * 0.20))
+                        poll_sleep = max(0.15, desired - poll_elapsed * 0.5)
+                    if prefetch_bytes < 2 * 1024 * 1024:
+                        poll_sleep = min(poll_sleep, 0.25)
                     await asyncio.sleep(poll_sleep)
             finally:
                 try:
@@ -2508,8 +2547,8 @@ class Engine:
                     pass
 
         producer_task = asyncio.create_task(_prefetch_producer())
-        bootstrap_remaining = 512 * 1024  # Fast-fill initial 512 KB so prefetch queue retains ~1.5-2.0s smooth buffer
-        slice_bytes = 188 * 174  # 32,712 bytes when live .ts/UDP subscribers exist
+        bootstrap_remaining = 1536 * 1024  # Fast-fill initial 1.5 MB for immediate keyframe segment formation
+        slice_bytes = 188 * 174  # 32,712 bytes per paced slice
         seg_clock = None
         try:
             while self._running:
@@ -2531,67 +2570,72 @@ class Engine:
                     await asyncio.sleep(0)
                     continue
 
+                eff_bps = seg_bps if seg_bps > 0 else ((self._pcr_bitrate / 8.0) if (self._pcr_bitrate and self._pcr_bitrate > 0) else 0.0)
+
                 if not self._subscribers and not self._output_states:
                     t_pcr_before = self._timeline
                     self.feed(chunk)
                     del chunk
                     pcr_delta = self._timeline - t_pcr_before
-                    if 0.0 < pcr_delta <= 0.80:
+                    nom_dur = (chunk_len / eff_bps) if eff_bps > 0 else 0.0
+                    if nom_dur > 0 and 0.0 < pcr_delta <= 0.80:
+                        slice_dur = 0.6 * nom_dur + 0.4 * pcr_delta
+                    elif nom_dur > 0:
+                        slice_dur = nom_dur
+                    elif 0.0 < pcr_delta <= 0.80:
                         slice_dur = pcr_delta
-                    elif self._pcr_last is None and seg_bps > 0:
-                        slice_dur = chunk_len / seg_bps
                     else:
                         slice_dur = 0.0
                     now = time.monotonic()
-                    if seg_clock is None or now > seg_clock + 0.30:
+                    if seg_clock is None or now > seg_clock + 0.35:
                         seg_clock = now
-                    pace_factor = 0.96 if prefetch_bytes > 1024 * 1024 else (0.99 if prefetch_bytes >= 256 * 1024 else 1.00)
+                    pace_factor = 0.96 if prefetch_bytes > 8 * 1024 * 1024 else (0.99 if prefetch_bytes >= 2 * 1024 * 1024 else 1.01)
                     seg_clock += slice_dur * pace_factor
                     wait = seg_clock - now
-                    if wait >= 0.035:
+                    if wait >= 0.020:
                         await asyncio.sleep(wait)
                     elif wait < -0.35:
-                        seg_clock = now - 0.08
+                        seg_clock = now - 0.05
                     continue
 
                 mv_chunk = memoryview(chunk)
                 try:
                     pos = 0
                     now = time.monotonic()
-                    if seg_clock is None or now > seg_clock + 0.30:
+                    if seg_clock is None or now > seg_clock + 0.35:
                         seg_clock = now
 
-                    cur_slice = slice_bytes if (self._subscribers or self._output_states) else chunk_len
                     while pos < chunk_len and self._running:
-                        step = min(cur_slice, chunk_len - pos)
+                        step = min(slice_bytes, chunk_len - pos)
                         t_pcr_before = self._timeline
                         self.feed(mv_chunk[pos:pos + step])
                         pos += step
                         pcr_delta = self._timeline - t_pcr_before
+                        nom_dur = (step / eff_bps) if eff_bps > 0 else 0.0
 
-                        # Hardware PCR clock drives VBR pacing; fallback to segment bitrate only before PCR lock
-                        if 0.0 < pcr_delta <= 0.50:
+                        if nom_dur > 0 and 0.0 < pcr_delta <= 0.35:
+                            slice_dur = 0.6 * nom_dur + 0.4 * pcr_delta
+                        elif nom_dur > 0:
+                            slice_dur = nom_dur
+                        elif 0.0 < pcr_delta <= 0.35:
                             slice_dur = pcr_delta
-                        elif self._pcr_last is None and seg_bps > 0:
-                            slice_dur = step / seg_bps
                         else:
                             slice_dur = 0.0
 
-                        # Smooth PLL pacing based on prefetch fullness
-                        if prefetch_bytes > 1024 * 1024:
+                        if prefetch_bytes > 8 * 1024 * 1024:
                             pace_factor = 0.96
-                        elif prefetch_bytes >= 256 * 1024:
+                        elif prefetch_bytes >= 2 * 1024 * 1024:
                             pace_factor = 0.99
                         else:
                             pace_factor = 1.01
 
                         seg_clock += slice_dur * pace_factor
                         wait = seg_clock - time.monotonic()
-                        if wait > 0.008:
+                        if wait > 0.006:
                             await asyncio.sleep(wait)
                         else:
                             if wait < -0.35:
-                                seg_clock = time.monotonic() - 0.08
+                                seg_clock = time.monotonic() - 0.05
                             await asyncio.sleep(0)
                 finally:
                     mv_chunk.release()
@@ -2636,10 +2680,7 @@ class Engine:
                     switch_to_hls = True
                 else:
                     first_chunk = True
-                    ts_clock = None
-                    bootstrap_rem = 384 * 1024
-                    slice_sz = 188 * 174
-                    read_sz = 131036 if (self._subscribers or self._output_states) else 262072
+                    read_sz = 65424 if (self._subscribers or self._output_states) else 131036
                     async for chunk in response.aiter_bytes(read_sz):
                         if not self._running or not chunk:
                             break
@@ -2648,35 +2689,8 @@ class Engine:
                             if chunk.lstrip().startswith(b"#EXTM3U"):
                                 switch_to_hls = True
                                 break
-                        if bootstrap_rem > 0 or (not self._subscribers and not self._output_states):
-                            self.feed(chunk)
-                            if bootstrap_rem > 0:
-                                bootstrap_rem -= len(chunk)
-                            del chunk
-                            continue
-                        mv_c = memoryview(chunk)
-                        try:
-                            pos = 0
-                            clen = len(chunk)
-                            now = time.monotonic()
-                            if ts_clock is None or now > ts_clock + 0.25:
-                                ts_clock = now
-                            while pos < clen and self._running:
-                                step = min(slice_sz, clen - pos)
-                                t_before = self._timeline
-                                self.feed(mv_c[pos:pos + step])
-                                pos += step
-                                pcr_d = self._timeline - t_before
-                                if 0.0 < pcr_d <= 0.25:
-                                    ts_clock += pcr_d * 0.94
-                                    wait = ts_clock - time.monotonic()
-                                    if 0.004 < wait <= 0.12:
-                                        await asyncio.sleep(wait)
-                                    elif wait < -0.25:
-                                        ts_clock = time.monotonic()
-                        finally:
-                            mv_c.release()
-                            del chunk
+                        self.feed(chunk)
+                        del chunk
             if switch_to_hls and self._running:
                 await self._stream_hls_playlist(client, resolved_hls_url)
 
@@ -2835,8 +2849,6 @@ class _AsyncHttpResponse:
         async def _wait_coalesced():
             if not reader.at_eof():
                 await asyncio.wait_for(reader._wait_for_data("read"), timeout=timeout)
-                if is_remote and rbuf is not None and len(rbuf) < 32712 and not reader.at_eof():
-                    await asyncio.sleep(coalesce_window)
 
         async def _fill_at_least(min_bytes: int):
             if len(rbuf) >= min_bytes:
@@ -2851,8 +2863,6 @@ class _AsyncHttpResponse:
                 if rem_t <= 0:
                     raise asyncio.TimeoutError()
                 await asyncio.wait_for(reader._wait_for_data("read"), timeout=min(timeout, rem_t))
-                if is_remote and len(rbuf) < min_bytes and (min_bytes - len(rbuf)) >= 16384 and not reader.at_eof():
-                    await asyncio.sleep(coalesce_window)
 
         async def _readuntil_crlf() -> bytes:
             if rbuf is not None:
@@ -3684,7 +3694,7 @@ class StreamWorker:
             ]
             low_in = input_url.lower().split("?", 1)[0]
             if (raw_input_url in self.manager.hls_urls or input_url in self.manager.hls_urls or low_in.endswith((".m3u8", ".m3u"))) and not low_in.endswith(".ts"):
-                cmd += ["-f", "hls"]
+                cmd += ["-f", "hls", "-live_start_index", "-2"]
         elif input_url.startswith("udp://"):
             cmd += ["-timeout", str(int(self.cfg.get("source_timeout", 15)) * 1_000_000)]
         elif raw_input_url.strip().startswith("srt://"):
@@ -3987,10 +3997,10 @@ class StreamWorker:
                     try:
                         self.astrag_engine = AstraGEngine(
                             ordered_urls,
-                            segment_duration=2.0,
+                            segment_duration=2.5,
                             max_segments=6,
-                            max_segment_bytes=4 * 1024 * 1024,
-                            max_hls_bytes=12 * 1024 * 1024,
+                            max_segment_bytes=12 * 1024 * 1024,
+                            max_hls_bytes=28 * 1024 * 1024,
                             stream_options={
                                 "user_agent": primary_ua,
                                 "fallback_user_agent": fallback_ua,
@@ -4715,7 +4725,7 @@ async def handle_http_mpegts(req: web.Request) -> web.StreamResponse:
     sess = MANAGER.register_session(name, req, "MPEG-TS")
     if w.cfg.get("engine") == "astrag" and w.astrag_engine is not None:
         eng = w.astrag_engine
-        queue = eng.subscribe(512, chunk_mode=True)
+        queue = eng.subscribe(2048, chunk_mode=True)
         prebuffer_parts = eng.get_mpegts_prebuffer_parts()
         try:
             while not queue.empty():
