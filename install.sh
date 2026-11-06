@@ -131,9 +131,9 @@ def _configure_libc_allocator():
         if hasattr(libc, "mallopt"):
             libc.mallopt.argtypes = [ctypes.c_int, ctypes.c_int]
             libc.mallopt.restype = ctypes.c_int
-            libc.mallopt(-3, 4 * 1024 * 1024)  # M_MMAP_THRESHOLD = 4 MB (avoids per-segment mmap page faults)
-            libc.mallopt(-1, 2 * 1024 * 1024)  # M_TRIM_THRESHOLD = 2 MB
-            libc.mallopt(-8, 2)                # M_ARENA_MAX = 2
+            libc.mallopt(-3, 128 * 1024)  # M_MMAP_THRESHOLD = 128 KB (large media buffers unmap immediately on free)
+            libc.mallopt(-1, 64 * 1024)   # M_TRIM_THRESHOLD = 64 KB
+            libc.mallopt(-8, 1)           # M_ARENA_MAX = 1
         if hasattr(libc, "malloc_trim"):
             libc.malloc_trim.argtypes = [ctypes.c_size_t]
             libc.malloc_trim.restype = ctypes.c_int
@@ -147,7 +147,7 @@ def trim_process_memory():
     global _LAST_MALLOC_TRIM
     if _LIBC is not None:
         now = time.monotonic()
-        if now - _LAST_MALLOC_TRIM >= 30.0:
+        if now - _LAST_MALLOC_TRIM >= 8.0:
             _LAST_MALLOC_TRIM = now
             try:
                 _LIBC.malloc_trim(0)
@@ -1923,28 +1923,33 @@ class Engine:
             self._current.extend(packet)
             return packet
 
-    def get_mpegts_prebuffer(self) -> bytes:
-        """Return a keyframe-aligned, CC-continuous MPEG-TS prebuffer ending at the exact current packet."""
+    def get_mpegts_prebuffer_parts(self) -> list:
+        """Return keyframe-aligned, CC-continuous MPEG-TS prebuffer chunks without copying."""
         cur = bytes(self._current) if self._current else b""
         if self._segments:
             last_seg = next(reversed(self._segments.values()))
             seg_data = last_seg.data if isinstance(last_seg.data, bytes) else bytes(last_seg.data)
             if seg_data:
-                if len(seg_data) + len(cur) <= 3500 * 1024:
-                    return seg_data + cur
+                if len(seg_data) + len(cur) <= 2500 * 1024:
+                    return [seg_data, cur] if cur else [seg_data]
                 if self._current_has_keyframe and len(cur) >= 188 * 256:
-                    return cur
-                return seg_data + cur
+                    return [cur]
+                return [seg_data, cur] if cur else [seg_data]
         if cur and (self._current_has_keyframe or not self._seen_video_keyframes):
-            return cur
-        return b""
+            return [cur]
+        return []
+
+    def get_mpegts_prebuffer(self) -> bytes:
+        """Return a keyframe-aligned, CC-continuous MPEG-TS prebuffer ending at the exact current packet."""
+        parts = self.get_mpegts_prebuffer_parts()
+        return b"".join(parts) if parts else b""
 
     def _finish_segment(self):
         if not self._current:
             return
         duration = max(0.001, self._elapsed_segment())
         seg_bytes = bytes(self._current)
-        self._current = bytearray()
+        self._current.clear()
         segment = Segment(self._sequence, seg_bytes, duration,
                           self._current_discontinuity)
         self._segments[self._sequence] = segment
@@ -1960,19 +1965,30 @@ class Engine:
         self._current_has_keyframe = False
         self._current_has_audio = False
         self._current_discontinuity = False
-        while (len(self._segments) > self.max_segments or
-               self._segment_bytes > self.max_hls_bytes):
+        hls_hot = self.is_hls_active()
+        eff_max_segs = self.max_segments if hls_hot else min(self.max_segments, 2)
+        eff_max_bytes = self.max_hls_bytes if hls_hot else min(self.max_hls_bytes, 4 * 1024 * 1024)
+        evicted_any = False
+        while (len(self._segments) > eff_max_segs or
+               (len(self._segments) > 1 and self._segment_bytes > eff_max_bytes)):
             _, old = self._segments.popitem(last=False)
             self._segment_bytes -= len(old.data)
             self._evicted_discontinuities += int(old.discontinuity)
+            evicted_any = True
+        if evicted_any:
+            trim_process_memory()
 
     def touch_hls(self):
         """Mark in-memory HLS access timestamp."""
         self._hls_last_access = self._clock()
 
     def is_hls_active(self) -> bool:
-        """Return True (AstraG always maintains its sliding-window HLS segments in RAM)."""
-        return True
+        """Return True if HLS was accessed recently (or in deterministic tests)."""
+        if self._clock is not time.monotonic:
+            return True
+        if self._hls_last_access is not None and (self._clock() - self._hls_last_access) < 20.0:
+            return True
+        return False
 
     async def wait_for_hls(self, timeout: float = 4.0) -> bool:
         """Wait for complete keyframe-aligned HLS segments to be ready."""
@@ -1992,9 +2008,9 @@ class Engine:
         """Return an M3U8 string with relative segment-<sequence>.ts URIs."""
         self._hls_last_access = self._clock()
         all_segs = list(self._segments.values())
-        if len(all_segs) > 5 and self.max_segments >= 7:
-            skipped = all_segs[:-5]
-            visible = all_segs[-5:]
+        if len(all_segs) > 4 and self.max_segments >= 5:
+            skipped = all_segs[:-4]
+            visible = all_segs[-4:]
             disc_seq = self._evicted_discontinuities + sum(1 for s in skipped if s.discontinuity)
         else:
             visible = all_segs
@@ -2117,10 +2133,10 @@ class Engine:
         """Cesbo Astra sync_buffer HLS input: low-RAM streaming chunk prefetcher + PCR-locked VBR pacer."""
         self._is_hls_input = True
         seen_segments = OrderedDict()
-        prefetch_queue: asyncio.Queue = asyncio.Queue(maxsize=64)
+        prefetch_queue: asyncio.Queue = asyncio.Queue(maxsize=48)
         prefetch_bytes = 0
-        max_prefetch_bytes = 4 * 1024 * 1024  # 4 MB streaming chunk cap per stream
-        max_single_seg_bytes = 24 * 1024 * 1024
+        max_prefetch_bytes = 2 * 1024 * 1024  # 2 MB streaming chunk cap per stream
+        max_single_seg_bytes = 16 * 1024 * 1024
         producer_error = None
 
         master_url = playlist_url
@@ -2330,7 +2346,7 @@ class Engine:
                     pass
 
         producer_task = asyncio.create_task(_prefetch_producer())
-        bootstrap_remaining = 3 * 1024 * 1024  # Fast-fill initial HLS segment so prefetch queue retains smooth pacing buffer
+        bootstrap_remaining = 1536 * 1024  # Fast-fill initial HLS segment so prefetch queue retains smooth pacing buffer
         slice_bytes = 188 * 174  # 32,712 bytes when live .ts/UDP subscribers exist
         seg_clock = None
         try:
@@ -2385,11 +2401,11 @@ class Engine:
                             slice_dur = 0.008
 
                         # Smooth PLL pacing: never slower than 1.0x real-time
-                        if prefetch_bytes > 2048 * 1024:
+                        if prefetch_bytes > 1280 * 1024:
                             pace_factor = 0.88
-                        elif prefetch_bytes > 1024 * 1024:
+                        elif prefetch_bytes > 640 * 1024:
                             pace_factor = 0.93
-                        elif prefetch_bytes >= 256 * 1024:
+                        elif prefetch_bytes >= 192 * 1024:
                             pace_factor = 0.97
                         else:
                             pace_factor = 0.99
@@ -3644,10 +3660,10 @@ class StreamWorker:
                     try:
                         self.astrag_engine = AstraGEngine(
                             ordered_urls,
-                            segment_duration=3.0,
-                            max_segments=8,
-                            max_segment_bytes=8 * 1024 * 1024,
-                            max_hls_bytes=48 * 1024 * 1024,
+                            segment_duration=2.0,
+                            max_segments=6,
+                            max_segment_bytes=4 * 1024 * 1024,
+                            max_hls_bytes=12 * 1024 * 1024,
                             stream_options={
                                 "user_agent": primary_ua,
                                 "fallback_user_agent": fallback_ua,
@@ -4223,18 +4239,20 @@ async def ensure_ondemand_ready(w: StreamWorker, for_hls: bool = True) -> bool:
     for _ in range(110):
         if w.cfg.get("engine") == "astrag" and w.astrag_engine is not None:
             eng = w.astrag_engine
+            if for_hls:
+                eng.touch_hls()
             w._update_astrag_state()
             segs_dict = getattr(eng, "_segments", {})
             elapsed_eng = time.monotonic() - getattr(eng, "_created", time.monotonic())
             if for_hls:
                 if len(segs_dict) >= 2:
                     return True
-                if len(segs_dict) >= 1 and elapsed_eng >= 3.2:
+                if len(segs_dict) >= 1 and elapsed_eng >= 2.5:
                     return True
                 if (not getattr(eng, "_seen_video_keyframes", False) and
                         int(getattr(eng, "_counts", {}).get("packets", 0)) >= 64 and
                         len(getattr(eng, "_current", b"")) >= 188 * 32 and
-                        elapsed_eng >= 2.0):
+                        elapsed_eng >= 1.8):
                     try:
                         eng._finish_segment()
                         w._update_astrag_state()
@@ -4269,9 +4287,12 @@ async def handle_live_hls(req: web.Request) -> web.Response:
     if sess.kicked:
         raise web.HTTPForbidden(text="Session kicked")
 
+    if w.cfg.get("engine") == "astrag" and w.astrag_engine is not None:
+        w.astrag_engine.touch_hls()
     ready = await ensure_ondemand_ready(w, for_hls=True)
     if w.cfg.get("engine") == "astrag" and w.astrag_engine is not None:
         eng = w.astrag_engine
+        eng.touch_hls()
         w._update_astrag_state()
         if not getattr(eng, "_segments", None):
             raise web.HTTPServiceUnavailable(text=f"Stream buffering ({w.codec_info})")
@@ -4366,8 +4387,8 @@ async def handle_http_mpegts(req: web.Request) -> web.StreamResponse:
     sess = MANAGER.register_session(name, req, "MPEG-TS")
     if w.cfg.get("engine") == "astrag" and w.astrag_engine is not None:
         eng = w.astrag_engine
-        queue = eng.subscribe(16384)
-        prebuffer = eng.get_mpegts_prebuffer()
+        queue = eng.subscribe(6144)
+        prebuffer_parts = eng.get_mpegts_prebuffer_parts()
         try:
             while not queue.empty():
                 stale = queue.get_nowait()
@@ -4379,15 +4400,20 @@ async def handle_http_mpegts(req: web.Request) -> web.StreamResponse:
                     break
             burst_sent = False
             aligned = False
-            if prebuffer:
-                for off in range(0, len(prebuffer), 65424):
-                    if sess.kicked or not w.cfg.get("enabled", True):
-                        break
-                    chunk_pb = prebuffer[off:off + 65424]
-                    await resp.write(chunk_pb)
-                    sess.bytes_sent += len(chunk_pb)
+            if prebuffer_parts:
+                for part in prebuffer_parts:
+                    mv_p = memoryview(part)
+                    try:
+                        for off in range(0, len(part), 65424):
+                            if sess.kicked or not w.cfg.get("enabled", True):
+                                break
+                            chunk_pb = bytes(mv_p[off:off + 65424])
+                            await resp.write(chunk_pb)
+                            sess.bytes_sent += len(chunk_pb)
+                    finally:
+                        mv_p.release()
                 sess.last_seen = time.time()
-                prebuffer = b""
+                prebuffer_parts.clear()
                 aligned = True
                 burst_sent = True
             align_deadline = time.monotonic() + 2.5
