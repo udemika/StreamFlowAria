@@ -131,9 +131,9 @@ def _configure_libc_allocator():
         if hasattr(libc, "mallopt"):
             libc.mallopt.argtypes = [ctypes.c_int, ctypes.c_int]
             libc.mallopt.restype = ctypes.c_int
-            libc.mallopt(-3, 128 * 1024)  # M_MMAP_THRESHOLD = 128 KB (large media buffers unmap immediately on free)
-            libc.mallopt(-1, 64 * 1024)   # M_TRIM_THRESHOLD = 64 KB
-            libc.mallopt(-8, 1)           # M_ARENA_MAX = 1
+            libc.mallopt(-3, 8 * 1024 * 1024)  # M_MMAP_THRESHOLD = 8 MB (avoid 6000/s kernel mmap page faults on chunks)
+            libc.mallopt(-1, 1024 * 1024)      # M_TRIM_THRESHOLD = 1 MB
+            libc.mallopt(-8, 1)                # M_ARENA_MAX = 1
         if hasattr(libc, "malloc_trim"):
             libc.malloc_trim.argtypes = [ctypes.c_size_t]
             libc.malloc_trim.restype = ctypes.c_int
@@ -147,7 +147,7 @@ def trim_process_memory():
     global _LAST_MALLOC_TRIM
     if _LIBC is not None:
         now = time.monotonic()
-        if now - _LAST_MALLOC_TRIM >= 8.0:
+        if now - _LAST_MALLOC_TRIM >= 20.0:
             _LAST_MALLOC_TRIM = now
             try:
                 _LIBC.malloc_trim(0)
@@ -872,9 +872,9 @@ class Segment:
 
 class Engine:
     def __init__(self, urls=(), outputs=None, *, queue_size=4096,
-                 segment_duration=2.5, max_segments=7,
-                 max_segment_bytes=24 * 1024 * 1024,
-                 max_hls_bytes=64 * 1024 * 1024, retry_delay=0.5,
+                 segment_duration=2.0, max_segments=6,
+                 max_segment_bytes=20 * 1024 * 1024,
+                 max_hls_bytes=48 * 1024 * 1024, retry_delay=0.5,
                  udp_timeout=10.0, stream_options=None,
                  clock: Callable[[], float] = time.monotonic):
         if isinstance(urls, str):
@@ -1118,7 +1118,10 @@ class Engine:
             and (_C_TS_LIB is not None or self._hls_seg_boundary_pkts == 0)
         ):
             is_hls = self._is_hls_input
-            buf = data if isinstance(data, bytearray) else (bytearray(data) if (is_hls or _C_TS_LIB is not None) else data)
+            if isinstance(data, bytearray) or (isinstance(data, memoryview) and not data.readonly):
+                buf = data
+            else:
+                buf = bytearray(data) if (is_hls or _C_TS_LIB is not None) else data
             mv = memoryview(buf)
             try:
                 pids = self._pids
@@ -1254,6 +1257,13 @@ class Engine:
                                 self._current.extend(mv[pos:new_pos])
                                 if c_has_audio.value:
                                     self._current_has_audio = True
+                                if (self._segments and self._clock is time.monotonic and not self.is_hls_active()
+                                        and self._current_has_keyframe and len(self._current) >= 1572864
+                                        and self._segment_bytes + len(self._current) > 8 * 1024 * 1024):
+                                    while self._segments:
+                                        _, old_s = self._segments.popitem(last=False)
+                                        self._segment_bytes -= len(old_s.data)
+                                        self._evicted_discontinuities += int(old_s.discontinuity)
                                 if has_outs:
                                     if self._chunk_subscribers:
                                         chunk_b = bytes(mv[pos:new_pos])
@@ -2040,8 +2050,12 @@ class Engine:
         if not self._current:
             return
         duration = max(0.001, self._elapsed_segment())
-        seg_bytes = bytes(self._current)
-        self._current.clear()
+        if self._clock is time.monotonic:
+            seg_bytes = self._current
+            self._current = bytearray()
+        else:
+            seg_bytes = bytes(self._current)
+            self._current.clear()
         segment = Segment(self._sequence, seg_bytes, duration,
                           self._current_discontinuity)
         self._segments[self._sequence] = segment
@@ -2058,17 +2072,24 @@ class Engine:
         self._current_has_audio = False
         self._current_discontinuity = False
         hls_hot = self.is_hls_active()
-        eff_max_segs = self.max_segments if hls_hot else min(self.max_segments, 5)
-        eff_max_bytes = self.max_hls_bytes if hls_hot else min(self.max_hls_bytes, 48 * 1024 * 1024)
-        min_keep_segs = 5 if hls_hot else 4
-        evicted_any = False
+        if hls_hot:
+            eff_max_segs = 3 if duration >= 7.0 else min(self.max_segments, 5)
+            eff_max_bytes = self.max_hls_bytes
+            min_keep_segs = 3 if duration >= 7.0 else 4
+        else:
+            eff_max_segs = 1 if len(seg_bytes) > 6 * 1024 * 1024 else 2
+            eff_max_bytes = 8 * 1024 * 1024
+            min_keep_segs = 1
+        evicted_large = False
         while (len(self._segments) > eff_max_segs or
                (len(self._segments) > min_keep_segs and self._segment_bytes > eff_max_bytes)):
             _, old = self._segments.popitem(last=False)
-            self._segment_bytes -= len(old.data)
+            old_len = len(old.data)
+            self._segment_bytes -= old_len
             self._evicted_discontinuities += int(old.discontinuity)
-            evicted_any = True
-        if evicted_any:
+            if old_len >= 6 * 1024 * 1024:
+                evicted_large = True
+        if evicted_large:
             trim_process_memory()
 
     def touch_hls(self):
@@ -2079,7 +2100,7 @@ class Engine:
         """Return True if HLS was accessed recently (or in deterministic tests)."""
         if self._clock is not time.monotonic:
             return True
-        if self._hls_last_access is not None and (self._clock() - self._hls_last_access) < 45.0:
+        if self._hls_last_access is not None and (self._clock() - self._hls_last_access) < 35.0:
             return True
         return False
 
@@ -2101,6 +2122,8 @@ class Engine:
         """Return an M3U8 string with relative segment-<sequence>.ts URIs."""
         self._hls_last_access = self._clock()
         all_segs = list(self._segments.values())
+        if not all_segs and self._clock is time.monotonic and len(self._current) >= 188 * 256:
+            all_segs = [Segment(self._sequence, self._current, max(1.0, self._elapsed_segment()), self._current_discontinuity)]
         if len(all_segs) > 4 and self.max_segments >= 5:
             skipped = all_segs[:-4]
             visible = all_segs[-4:]
@@ -2124,8 +2147,11 @@ class Engine:
     def get_segment(self, sequence):
         """Return immutable segment bytes, or None if not ready/evicted."""
         self._hls_last_access = self._clock()
-        segment = self._segments.get(int(sequence))
+        seq_id = int(sequence)
+        segment = self._segments.get(seq_id)
         if segment is None:
+            if seq_id == self._sequence and self._current:
+                return bytes(self._current)
             return None
         if not isinstance(segment.data, bytes):
             object.__setattr__(segment, "data", bytes(segment.data))
@@ -2244,9 +2270,9 @@ class Engine:
         self._is_hls_input = True
         seen_segments = OrderedDict()
         seg_url_queue: asyncio.Queue = asyncio.Queue(maxsize=64)
-        prefetch_queue: asyncio.Queue = asyncio.Queue(maxsize=512)
+        prefetch_queue: asyncio.Queue = asyncio.Queue(maxsize=256)
         prefetch_bytes = 0
-        max_prefetch_bytes = 36 * 1024 * 1024  # 36 MB prefetch cushion per HLS stream (holds 2.5x 15MB 4K segments)
+        max_prefetch_bytes = 4608 * 1024  # 4.5 MB active TS chunk window (while seg_url_queue holds 30-60s of URLs at 0 MB RAM)
         max_single_seg_bytes = 64 * 1024 * 1024  # Support up to 64 MB 4K segments
         producer_error = None
         poller_done = False
@@ -2423,7 +2449,7 @@ class Engine:
                             next_dur = None
 
                     avg_seg_dur = (sum(e[1] for e in seg_entries) / len(seg_entries)) if seg_entries else target_duration
-                    init_keep = 4 if avg_seg_dur <= 6.0 else 3
+                    init_keep = 3 if avg_seg_dur <= 6.0 else 2
                     if first_load and len(seg_entries) > init_keep:
                         for old_url, _, _, _ in seg_entries[:-init_keep]:
                             _mark_seen(old_url)
@@ -2447,16 +2473,16 @@ class Engine:
 
                     poll_elapsed = time.monotonic() - t_poll_start
                     eff_target = min(target_duration, avg_seg_dur) if avg_seg_dur > 0 else target_duration
-                    has_cushion = (seg_url_queue.qsize() >= 2 or prefetch_bytes >= 12 * 1024 * 1024)
+                    has_cushion = (seg_url_queue.qsize() >= 1 or prefetch_bytes >= 3 * 1024 * 1024)
                     if new_entries:
                         desired = max(1.0, min(eff_target * 0.50, 5.0))
                         min_gap = 1.2 if has_cushion else 0.35
                         poll_sleep = max(min_gap, desired - poll_elapsed)
                     else:
                         desired = max(0.8, min(eff_target * 0.32, 3.0))
-                        min_gap = 0.8 if (seg_url_queue.qsize() >= 1 or prefetch_bytes >= 8 * 1024 * 1024) else 0.25
+                        min_gap = 0.8 if has_cushion else 0.25
                         poll_sleep = max(min_gap, desired - poll_elapsed * 0.5)
-                    if prefetch_bytes < 3 * 1024 * 1024 and seg_url_queue.empty():
+                    if prefetch_bytes < 1536 * 1024 and seg_url_queue.empty():
                         poll_sleep = min(poll_sleep, 0.25)
                     await asyncio.sleep(poll_sleep)
             finally:
@@ -2503,7 +2529,7 @@ class Engine:
                             seg_read = 0
                             first_chunk = True
                             seg_chunks_buf = []
-                            read_chunk_sz = 131036
+                            read_chunk_sz = 262072
                             if key_bytes is not None:
                                 enc_parts = bytearray()
                                 async for chunk in seg_resp.aiter_bytes(read_chunk_sz):
@@ -2586,7 +2612,7 @@ class Engine:
         poller_task = asyncio.create_task(_playlist_poller())
         downloader_task = asyncio.create_task(_segment_downloader())
         bootstrap_remaining = 512 * 1024  # Fast-fill initial 512 KB for immediate lock without draining buffer
-        slice_bytes = 188 * 174  # 32,712 bytes per paced slice
+        slice_bytes = 188 * 348  # 65,424 bytes per paced slice
         seg_clock = None
         try:
             while self._running:
@@ -2625,23 +2651,22 @@ class Engine:
                         slice_dur = pcr_delta
                     else:
                         slice_dur = (chunk_len / (512 * 1024)) * max(0.8, seg_dur / 4.0)
-                    if prefetch_bytes > 22 * 1024 * 1024:
+                    if prefetch_bytes > 3800 * 1024:
                         pace_factor = 0.96
-                    elif prefetch_bytes > 12 * 1024 * 1024:
+                    elif prefetch_bytes > 2800 * 1024:
                         pace_factor = 0.99
-                    elif prefetch_bytes >= 5 * 1024 * 1024:
+                    elif prefetch_bytes >= 1200 * 1024:
                         pace_factor = 1.0
-                    elif prefetch_bytes >= 2 * 1024 * 1024:
-                        pace_factor = 1.035
+                    elif prefetch_bytes >= 512 * 1024 or not seg_url_queue.empty():
+                        pace_factor = 1.02
                     else:
-                        pace_factor = 1.07
+                        pace_factor = 1.06
                     seg_clock += slice_dur * pace_factor
                     wait = seg_clock - time.monotonic()
                     if wait < -0.35:
                         seg_clock = time.monotonic() - 0.05
-                    while wait >= 0.025 and self._running and not self._subscribers and not self._output_states:
-                        await asyncio.sleep(min(wait, 0.15))
-                        wait = seg_clock - time.monotonic()
+                    if wait >= 0.035 and self._running and not self._subscribers and not self._output_states:
+                        await asyncio.sleep(min(wait, 0.45))
                     continue
 
                 mv_chunk = memoryview(chunk)
@@ -2665,16 +2690,16 @@ class Engine:
                         else:
                             slice_dur = (step / (512 * 1024)) * max(0.8, seg_dur / 4.0)
 
-                        if prefetch_bytes > 22 * 1024 * 1024:
+                        if prefetch_bytes > 3800 * 1024:
                             pace_factor = 0.96
-                        elif prefetch_bytes > 12 * 1024 * 1024:
+                        elif prefetch_bytes > 2800 * 1024:
                             pace_factor = 0.99
-                        elif prefetch_bytes >= 5 * 1024 * 1024:
+                        elif prefetch_bytes >= 1200 * 1024:
                             pace_factor = 1.0
-                        elif prefetch_bytes >= 2 * 1024 * 1024:
-                            pace_factor = 1.035
+                        elif prefetch_bytes >= 512 * 1024 or not seg_url_queue.empty():
+                            pace_factor = 1.02
                         else:
-                            pace_factor = 1.07
+                            pace_factor = 1.06
 
                         seg_clock += slice_dur * pace_factor
                         wait = seg_clock - time.monotonic()
@@ -3025,63 +3050,116 @@ class _AsyncHttpResponse:
                     await asyncio.wait_for(reader.readexactly(2), timeout=timeout)
         elif clen_str is not None and clen_str.strip().isdigit():
             rem = int(clen_str.strip())
-            min_emit = min(chunk_size, 188 * 348)
-            while rem > 0:
-                target = min(chunk_size, rem)
-                wait_min = min(rem, min_emit)
-                try:
-                    if rbuf is not None:
-                        await _fill_at_least(wait_min)
-                        take = min(target, len(rbuf))
-                        if take > 188 and take < rem:
-                            aligned_take = (take // 188) * 188
-                            if aligned_take > 0:
-                                take = aligned_take
-                        out = bytearray(rbuf[:take])
-                        del rbuf[:take]
-                        reader._maybe_resume_transport()
-                    else:
-                        out = bytearray(await asyncio.wait_for(reader.readexactly(target), timeout=timeout))
-                except asyncio.IncompleteReadError as exc:
-                    if exc.partial:
-                        yield bytearray(exc.partial)
-                    can_keepalive = False
-                    break
-                rem -= len(out)
-                yield out
-            if rem == 0:
-                self._reusable = can_keepalive
+            min_emit = min(chunk_size, 188 * 696)
+            sock = getattr(reader, "_raw_sock", None)
+            last_lowat = 1
+
+            def _set_lowat(val: int):
+                nonlocal last_lowat
+                if sock is not None and val != last_lowat:
+                    try:
+                        sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVLOWAT, max(1, val))
+                        last_lowat = val
+                    except OSError:
+                        pass
+
+            try:
+                while rem > 0:
+                    target = min(chunk_size, rem)
+                    wait_min = min(rem, min_emit)
+                    try:
+                        if rbuf is not None:
+                            if len(rbuf) < wait_min:
+                                _set_lowat(min(wait_min - len(rbuf), 65536))
+                                reader._min_wake = wait_min
+                                await _fill_at_least(wait_min)
+                            take = min(target, len(rbuf))
+                            if take > 188 and take < rem:
+                                aligned_take = (take // 188) * 188
+                                if aligned_take > 0:
+                                    take = aligned_take
+                            out = bytearray(rbuf[:take])
+                            del rbuf[:take]
+                            reader._maybe_resume_transport()
+                        else:
+                            out = bytearray(await asyncio.wait_for(reader.readexactly(target), timeout=timeout))
+                    except asyncio.IncompleteReadError as exc:
+                        if exc.partial:
+                            yield bytearray(exc.partial)
+                        can_keepalive = False
+                        break
+                    rem -= len(out)
+                    yield out
+                if rem == 0:
+                    self._reusable = can_keepalive
+            finally:
+                reader._min_wake = 1
+                _set_lowat(1)
         else:
-            min_batch = min(chunk_size, 188 * 174)
+            min_batch = min(chunk_size, 188 * 696)
             first_yield = True
+            is_m3u_text = False
+            sock = getattr(reader, "_raw_sock", None)
+            last_lowat = 1
+
+            def _set_lowat_s(val: int):
+                nonlocal last_lowat
+                if sock is not None and val != last_lowat:
+                    try:
+                        sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVLOWAT, max(1, val))
+                        last_lowat = val
+                    except OSError:
+                        pass
+
             if rbuf is not None:
-                while True:
-                    while len(rbuf) < min_batch and not reader.at_eof():
-                        if first_yield and len(rbuf) >= 7 and rbuf[:64].lstrip().startswith(b"#EXTM3U"):
+                try:
+                    while True:
+                        eff_batch = 1 if is_m3u_text else min_batch
+                        while len(rbuf) < eff_batch and not reader.at_eof():
+                            if first_yield and len(rbuf) >= 7 and rbuf[:64].lstrip().startswith(b"#EXTM3U"):
+                                is_m3u_text = True
+                                break
+                            if not first_yield and not is_m3u_text:
+                                _set_lowat_s(min(eff_batch - len(rbuf), 65536))
+                                reader._min_wake = eff_batch
+                            else:
+                                _set_lowat_s(1)
+                                reader._min_wake = 1
+                            await _wait_coalesced()
+                        if not rbuf and reader.at_eof():
                             break
-                        await _wait_coalesced()
-                    if not rbuf and reader.at_eof():
-                        break
-                    if first_yield and rbuf[:64].lstrip().startswith(b"#EXTM3U"):
+                        if first_yield and rbuf[:64].lstrip().startswith(b"#EXTM3U"):
+                            first_yield = False
+                            is_m3u_text = True
+                            _set_lowat_s(1)
+                            reader._min_wake = 1
+                            out = bytearray(rbuf)
+                            rbuf.clear()
+                            reader._maybe_resume_transport()
+                            yield out
+                            continue
                         first_yield = False
-                        out = bytearray(rbuf)
-                        rbuf.clear()
-                        reader._maybe_resume_transport()
-                        yield out
-                        continue
-                    first_yield = False
-                    avail = min(len(rbuf), chunk_size)
-                    aligned = (avail // 188) * 188
-                    if aligned > 0:
-                        out = bytearray(rbuf[:aligned])
-                        del rbuf[:aligned]
-                        reader._maybe_resume_transport()
-                        yield out
-                    elif reader.at_eof() and rbuf:
-                        out = bytearray(rbuf)
-                        rbuf.clear()
-                        yield out
-                        break
+                        if is_m3u_text:
+                            out = bytearray(rbuf)
+                            rbuf.clear()
+                            reader._maybe_resume_transport()
+                            yield out
+                            continue
+                        avail = min(len(rbuf), chunk_size)
+                        aligned = (avail // 188) * 188
+                        if aligned > 0:
+                            out = bytearray(rbuf[:aligned])
+                            del rbuf[:aligned]
+                            reader._maybe_resume_transport()
+                            yield out
+                        elif reader.at_eof() and rbuf:
+                            out = bytearray(rbuf)
+                            rbuf.clear()
+                            yield out
+                            break
+                finally:
+                    reader._min_wake = 1
+                    _set_lowat_s(1)
             else:
                 pend = bytearray()
                 while True:
@@ -3210,17 +3288,29 @@ class _AsyncHttpClient:
                 sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 1024 * 1024)
             except OSError:
                 pass
+        rbuf_ref = reader._buffer
+        reader._min_wake = 1
+        reader._raw_sock = sock if scheme == "http" else None
+
+        def _fast_buf_updated(nbytes: int):
+            if nbytes > 0:
+                rbuf_ref.extend(_SHARED_IO_MV[:nbytes])
+                if len(rbuf_ref) >= reader._min_wake or (reader._min_wake == 1 and b"\r\n\r\n" in rbuf_ref):
+                    reader._wakeup_waiter()
+                else:
+                    reader._maybe_pause_transport()
+
         tr = getattr(writer, "_transport", None) or getattr(writer, "transport", None)
         ssl_proto = getattr(tr, "_ssl_protocol", None) if tr is not None else None
         if ssl_proto is not None and hasattr(ssl_proto, "_app_protocol_is_buffer"):
             ssl_proto._app_protocol_get_buffer = lambda sz: _SHARED_IO_MV
-            ssl_proto._app_protocol_buffer_updated = lambda nbytes: reader.feed_data(_SHARED_IO_MV[:nbytes])
+            ssl_proto._app_protocol_buffer_updated = _fast_buf_updated
             ssl_proto._app_protocol_is_buffer = True
         elif tr is not None and hasattr(tr, "_read_ready__get_buffer"):
             proto = getattr(tr, "_protocol", None)
             if proto is not None:
                 proto.get_buffer = lambda sz: _SHARED_IO_MV
-                proto.buffer_updated = lambda nbytes: reader.feed_data(_SHARED_IO_MV[:nbytes])
+                proto.buffer_updated = _fast_buf_updated
                 tr._read_ready_cb = tr._read_ready__get_buffer
         return key, reader, writer, False
 
@@ -4012,8 +4102,11 @@ class StreamWorker:
                 self.codec_info = " / ".join(tracks)
 
         segs_dict = getattr(eng, "_segments", {})
-        if segs_dict:
-            total_dur = sum(max(0.2, float(getattr(s, "duration", 3.0))) for s in segs_dict.values())
+        cur_el = float(eng._elapsed_segment()) if hasattr(eng, "_elapsed_segment") else 0.0
+        if segs_dict or cur_el > 0.2:
+            total_dur = sum(max(0.2, float(getattr(s, "duration", 2.0))) for s in segs_dict.values()) + cur_el
+            if getattr(eng, "_is_hls_input", False):
+                total_dur = max(total_dur, 6.0)
             self.cached_buffer_sec = min(self.target_buffer_seconds(), max(1, int(round(total_dur))))
             dvr_hours = int(self.cfg.get("dvr_hours", 0))
             if dvr_hours > 0:
@@ -4084,10 +4177,10 @@ class StreamWorker:
                     try:
                         self.astrag_engine = AstraGEngine(
                             ordered_urls,
-                            segment_duration=2.5,
-                            max_segments=7,
-                            max_segment_bytes=24 * 1024 * 1024,
-                            max_hls_bytes=64 * 1024 * 1024,
+                            segment_duration=2.0,
+                            max_segments=6,
+                            max_segment_bytes=20 * 1024 * 1024,
+                            max_hls_bytes=48 * 1024 * 1024,
                             stream_options={
                                 "user_agent": primary_ua,
                                 "fallback_user_agent": fallback_ua,
@@ -4723,7 +4816,7 @@ async def handle_live_hls(req: web.Request) -> web.Response:
         eng = w.astrag_engine
         eng.touch_hls()
         w._update_astrag_state()
-        if not getattr(eng, "_segments", None):
+        if not getattr(eng, "_segments", None) and len(getattr(eng, "_current", b"")) < 188 * 256:
             raise web.HTTPServiceUnavailable(text=f"Stream buffering ({w.codec_info})")
         content = eng.hls_playlist()
         token_q = f"?token={req.query['token']}" if "token" in req.query else ""
