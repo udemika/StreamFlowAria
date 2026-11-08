@@ -2308,6 +2308,8 @@ class Engine:
 
         master_url = playlist_url
         active_playlist_url = playlist_url
+        seg_mirror_urls = OrderedDict()
+        slow_edge_hosts = set()
         edge_step_state = {"prefix": "", "ts_val": 0, "step": 0, "digits": 0, "suffix": "", "dur": 5.0, "key_uri": None, "iv": None, "synth_count": 0}
         _ts_seg_re = re.compile(r"^(https?://[^?#]+/)(\d{9,14})(\.ts(?:\?.*)?)$", re.I)
 
@@ -2536,9 +2538,18 @@ class Engine:
                             seg_seq += 1
                             next_dur = None
 
+                    for s_u, _, _, _ in seg_entries:
+                        ck_m = _seg_canon_key(s_u)
+                        sh_m = urlsplit(s_u).netloc
+                        if ck_m not in seg_mirror_urls or sh_m not in slow_edge_hosts:
+                            seg_mirror_urls[ck_m] = s_u
+                            seg_mirror_urls.move_to_end(ck_m)
+                            while len(seg_mirror_urls) > 120:
+                                seg_mirror_urls.popitem(last=False)
+
                     _update_edge_step_from_entries(seg_entries)
                     avg_seg_dur = (sum(e[1] for e in seg_entries) / len(seg_entries)) if seg_entries else target_duration
-                    init_keep = 3
+                    init_keep = 2 if avg_seg_dur >= 8.0 else 3
                     if first_load and len(seg_entries) > init_keep:
                         for old_url, _, _, _ in seg_entries[:-init_keep]:
                             _mark_seen(old_url)
@@ -2559,28 +2570,37 @@ class Engine:
                         await seg_url_queue.put(entry)
                     if new_entries:
                         consecutive_errors = 0
-                    elif seg_url_queue.empty() and prefetch_bytes < 2 * 1024 * 1024:
-                        _try_synthesize_edge_segment()
+                        stale_since = time.monotonic()
+                    else:
+                        if "stale_since" not in locals():
+                            stale_since = time.monotonic()
+                        elif (time.monotonic() - stale_since) > max(13.5, target_duration * 1.45) and active_playlist_url != master_url:
+                            active_playlist_url = master_url
+                            stale_since = time.monotonic()
+                        if seg_url_queue.empty() and prefetch_bytes < 2 * 1024 * 1024:
+                            _try_synthesize_edge_segment()
 
                     poll_elapsed = time.monotonic() - t_poll_start
                     eff_target = min(target_duration, avg_seg_dur) if avg_seg_dur > 0 else target_duration
                     is_php_proxy = ".php" in active_playlist_url.lower()
                     q_sz = seg_url_queue.qsize()
                     has_cushion = (q_sz >= 1 or prefetch_bytes >= 3 * 1024 * 1024)
-                    if is_php_proxy and q_sz >= 2:
-                        poll_sleep = max(8.5, min(eff_target * 1.8, 13.0) - poll_elapsed)
+                    if is_php_proxy and slow_edge_hosts:
+                        poll_sleep = max(2.0, 2.2 - poll_elapsed)
+                    elif is_php_proxy and q_sz >= 2:
+                        poll_sleep = max(6.5, min(eff_target * 1.3, 10.5) - poll_elapsed)
                     elif is_php_proxy and q_sz == 1:
-                        poll_sleep = max(4.5, min(eff_target * 1.1, 7.5) - poll_elapsed)
+                        poll_sleep = max(3.5, min(eff_target * 0.9, 6.5) - poll_elapsed)
                     elif new_entries:
-                        desired = max(1.8, min(eff_target * 0.65, 5.5))
-                        min_gap = 1.6 if has_cushion else 0.45
+                        desired = max(1.2, min(eff_target * 0.45, 3.2))
+                        min_gap = 1.2 if has_cushion else 0.40
                         poll_sleep = max(min_gap, desired - poll_elapsed)
                     else:
-                        desired = max(1.0, min(eff_target * 0.40, 3.2))
-                        min_gap = 1.0 if has_cushion else 0.35
+                        desired = 1.6 if is_php_proxy else max(0.65, min(eff_target * 0.18, 1.1))
+                        min_gap = (1.2 if is_php_proxy else 0.65) if has_cushion else 0.35
                         poll_sleep = max(min_gap, desired - poll_elapsed * 0.5)
-                    if prefetch_bytes < 1536 * 1024 and seg_url_queue.empty():
-                        poll_sleep = min(poll_sleep, 1.5 if is_php_proxy else 0.35)
+                    if prefetch_bytes < 2048 * 1024 and seg_url_queue.empty():
+                        poll_sleep = min(poll_sleep, 1.5 if is_php_proxy else 0.40)
                     await asyncio.sleep(poll_sleep)
             finally:
                 poller_done = True
@@ -2592,19 +2612,25 @@ class Engine:
         async def _segment_downloader():
             nonlocal prefetch_bytes, producer_error
             consecutive_errors = 0
+            range_step = 188 * 10240  # 1,925,120 bytes (~1.84 MB, exact multiple of 188-byte TS packets)
             async with _AsyncHttpClient(
                 connect_timeout=getattr(client, "connect_timeout", 10.0),
                 read_timeout=18.0,
                 headers=getattr(client, "headers", {}),
-            ) as seg_client:
+            ) as seg_client, _AsyncHttpClient(
+                connect_timeout=getattr(client, "connect_timeout", 10.0),
+                read_timeout=18.0,
+                headers=getattr(client, "headers", {}),
+            ) as seg_client_b:
+              range_disabled_hosts = set()
               try:
                 while self._running:
                     while self._running and prefetch_bytes >= max_prefetch_bytes:
-                        await asyncio.sleep(0.04)
+                        await asyncio.sleep(0.03)
                     if not self._running:
                         break
                     try:
-                        entry = await asyncio.wait_for(seg_url_queue.get(), timeout=1.2)
+                        entry = await asyncio.wait_for(seg_url_queue.get(), timeout=1.0)
                     except asyncio.TimeoutError:
                         if poller_done and seg_url_queue.empty():
                             break
@@ -2614,6 +2640,11 @@ class Engine:
                     if entry is None:
                         break
                     seg_url, seg_dur, seg_key_uri, seg_iv = entry
+                    seg_ck = _seg_canon_key(seg_url)
+                    if urlsplit(seg_url).netloc in slow_edge_hosts:
+                        alt_u = seg_mirror_urls.get(seg_ck)
+                        if alt_u and urlsplit(alt_u).netloc not in slow_edge_hosts:
+                            seg_url = alt_u
                     seg_read = 0
                     for seg_attempt in range(2):
                       try:
@@ -2628,16 +2659,14 @@ class Engine:
                                         self._hls_key_cache = {}
                                     self._hls_key_cache[seg_key_uri] = k_resp.content
                                     key_bytes = k_resp.content
-                        async with seg_client.stream("GET", seg_url) as seg_resp:
-                            seg_resp.raise_for_status()
-                            clen = int(seg_resp.headers.get("content-length") or 0)
-                            seg_bps = (clen / seg_dur) if (clen >= 188 and seg_dur > 0) else (
-                                (self._pcr_bitrate / 8.0) if (self._pcr_bitrate and self._pcr_bitrate > 0) else 1500000.0
-                            )
-                            seg_read = 0
-                            first_chunk = True
-                            read_chunk_sz = 262072
-                            if key_bytes is not None:
+                        read_chunk_sz = 262072
+                        if key_bytes is not None:
+                            async with seg_client.stream("GET", seg_url) as seg_resp:
+                                seg_resp.raise_for_status()
+                                clen = int(seg_resp.headers.get("content-length") or 0)
+                                seg_bps = (clen / seg_dur) if (clen >= 188 and seg_dur > 0) else (
+                                    (self._pcr_bitrate / 8.0) if (self._pcr_bitrate and self._pcr_bitrate > 0) else 1500000.0
+                                )
                                 enc_parts = bytearray()
                                 async for chunk in seg_resp.aiter_bytes(read_chunk_sz):
                                     if not self._running:
@@ -2653,14 +2682,44 @@ class Engine:
                                 calc_bps = (seg_read / max(0.5, seg_dur)) if seg_dur > 0 else seg_bps
                                 for pos in range(0, seg_read, read_chunk_sz):
                                     c_bytes = dec_bytes[pos:pos + read_chunk_sz]
-                                    while self._running and prefetch_bytes >= max_prefetch_bytes + 6 * 1024 * 1024:
+                                    while self._running and prefetch_bytes >= max_prefetch_bytes + 4 * 1024 * 1024:
                                         await asyncio.sleep(0.03)
                                     if not self._running:
                                         return
                                     prefetch_bytes += len(c_bytes)
                                     await prefetch_queue.put((c_bytes, seg_dur, calc_bps, pos == 0))
                                 del dec_bytes
-                            else:
+                        else:
+                            seg_parts = urlsplit(seg_url)
+                            seg_host = seg_parts.netloc
+                            use_range = (
+                                seg_attempt == 0
+                                and seg_host not in range_disabled_hosts
+                                and ".php" not in seg_parts.path.lower()
+                            )
+                            req_hdrs = {"Range": f"bytes=0-{range_step - 1}"} if use_range else None
+                            total_seg_bytes = 0
+                            is_partial_206 = False
+                            first_chunk = True
+                            seg_bps = (self._pcr_bitrate / 8.0) if (self._pcr_bitrate and self._pcr_bitrate > 0) else 1500000.0
+                            t_slice0 = time.monotonic()
+                            async with seg_client.stream("GET", seg_url, extra_headers=req_hdrs) as seg_resp:
+                                if req_hdrs is not None and seg_resp.status_code != 206:
+                                    range_disabled_hosts.add(seg_host)
+                                    if seg_resp.status_code >= 400:
+                                        raise ValueError("Range rejected, retry full GET")
+                                seg_resp.raise_for_status()
+                                if seg_resp.status_code == 206:
+                                    cr_hdr = seg_resp.headers.get("content-range", "")
+                                    if "/" in cr_hdr:
+                                        tot_s = cr_hdr.rsplit("/", 1)[1].strip()
+                                        if tot_s.isdigit():
+                                            total_seg_bytes = int(tot_s)
+                                            is_partial_206 = True
+                                if not total_seg_bytes:
+                                    total_seg_bytes = int(seg_resp.headers.get("content-length") or 0)
+                                if total_seg_bytes >= 188 and seg_dur > 0:
+                                    seg_bps = total_seg_bytes / seg_dur
                                 async for chunk in seg_resp.aiter_bytes(read_chunk_sz):
                                     if not self._running:
                                         return
@@ -2674,21 +2733,72 @@ class Engine:
                                     if seg_read + len(chunk) > max_single_seg_bytes:
                                         break
                                     seg_read += len(chunk)
-                                    while self._running and prefetch_bytes >= max_prefetch_bytes + 6 * 1024 * 1024:
+                                    while self._running and prefetch_bytes >= max_prefetch_bytes + 4 * 1024 * 1024:
                                         await asyncio.sleep(0.03)
                                     if not self._running:
                                         return
                                     prefetch_bytes += len(chunk)
                                     await prefetch_queue.put((chunk, seg_dur, seg_bps, is_seg_start))
-                            if seg_read >= 188:
-                                consecutive_errors = 0
+                            if is_partial_206 and (time.monotonic() - t_slice0) > 1.75:
+                                slow_edge_hosts.add(seg_host)
+                            if is_partial_206 and seg_read >= 188 and seg_read < total_seg_bytes and total_seg_bytes <= max_single_seg_bytes:
+                                pos = seg_read
+                                while pos < total_seg_bytes and self._running:
+                                    while self._running and prefetch_bytes >= max_prefetch_bytes:
+                                        await asyncio.sleep(0.03)
+                                    if not self._running:
+                                        return
+                                    if seg_host in slow_edge_hosts:
+                                        alt_u = seg_mirror_urls.get(seg_ck)
+                                        if alt_u and urlsplit(alt_u).netloc not in slow_edge_hosts:
+                                            seg_url = alt_u
+                                            seg_host = urlsplit(seg_url).netloc
+                                    s1 = pos
+                                    e1 = min(total_seg_bytes - 1, s1 + range_step - 1)
+                                    pos = e1 + 1
+                                    t_pair = time.monotonic()
+                                    if pos < total_seg_bytes:
+                                        s2 = pos
+                                        e2 = min(total_seg_bytes - 1, s2 + range_step - 1)
+                                        pos = e2 + 1
+                                        r1, r2 = await asyncio.gather(
+                                            seg_client.get(seg_url, extra_headers={"Range": f"bytes={s1}-{e1}"}),
+                                            seg_client_b.get(seg_url, extra_headers={"Range": f"bytes={s2}-{e2}"}),
+                                        )
+                                        r1.raise_for_status()
+                                        r2.raise_for_status()
+                                        if (time.monotonic() - t_pair) > 2.4:
+                                            slow_edge_hosts.add(seg_host)
+                                        for body_part in (r1.content, r2.content):
+                                            b_len = len(body_part)
+                                            for b_off in range(0, b_len, read_chunk_sz):
+                                                c_slice = body_part[b_off:b_off + read_chunk_sz]
+                                                seg_read += len(c_slice)
+                                                prefetch_bytes += len(c_slice)
+                                                await prefetch_queue.put((c_slice, seg_dur, seg_bps, False))
+                                        del r1, r2
+                                    else:
+                                        r1 = await seg_client.get(seg_url, extra_headers={"Range": f"bytes={s1}-{e1}"})
+                                        r1.raise_for_status()
+                                        if (time.monotonic() - t_pair) > 1.8:
+                                            slow_edge_hosts.add(seg_host)
+                                        body_part = r1.content
+                                        b_len = len(body_part)
+                                        for b_off in range(0, b_len, read_chunk_sz):
+                                            c_slice = body_part[b_off:b_off + read_chunk_sz]
+                                            seg_read += len(c_slice)
+                                            prefetch_bytes += len(c_slice)
+                                            await prefetch_queue.put((c_slice, seg_dur, seg_bps, False))
+                                        del r1, body_part
+                        if seg_read >= 188:
+                            consecutive_errors = 0
                         break
                       except asyncio.CancelledError:
                         raise
                       except Exception as exc:
                         is_404 = isinstance(exc, HTTPStatusError) and ("404" in str(exc) or "410" in str(exc))
                         if not is_404 and seg_attempt == 0 and seg_read == 0 and self._running:
-                            await asyncio.sleep(0.12)
+                            await asyncio.sleep(0.08)
                             continue
                         consecutive_errors += 1
                         self._counts["input_errors"] += 1
@@ -2732,6 +2842,7 @@ class Engine:
                 bootstrap_remaining = 0
 
                 eff_bps = seg_bps if seg_bps > 0 else ((self._pcr_bitrate / 8.0) if (self._pcr_bitrate and self._pcr_bitrate > 0) else 0.0)
+                has_queued_seg = not seg_url_queue.empty()
 
                 if not self._subscribers and not self._output_states:
                     now = time.monotonic()
@@ -2747,14 +2858,14 @@ class Engine:
                         slice_dur = pcr_delta
                     else:
                         slice_dur = (chunk_len / (512 * 1024)) * max(0.8, seg_dur / 4.0)
-                    if prefetch_bytes > 8 * 1024 * 1024:
-                        pace_factor = 0.96
-                    elif prefetch_bytes >= 2 * 1024 * 1024:
-                        pace_factor = 1.0
-                    elif prefetch_bytes >= 768 * 1024 or not seg_url_queue.empty():
-                        pace_factor = 1.015
+                    if has_queued_seg and prefetch_bytes >= max_prefetch_bytes:
+                        pace_factor = 0.985
+                    elif prefetch_bytes >= 2 * 1024 * 1024 or (has_queued_seg and prefetch_bytes >= 768 * 1024):
+                        pace_factor = 1.000
+                    elif prefetch_bytes >= 768 * 1024 or has_queued_seg:
+                        pace_factor = 1.012
                     else:
-                        pace_factor = 1.035
+                        pace_factor = 1.025
                     seg_clock += slice_dur * pace_factor
                     wait = seg_clock - time.monotonic()
                     if wait < -0.35:
@@ -2776,22 +2887,29 @@ class Engine:
                         self.feed(mv_chunk[pos:pos + step])
                         pos += step
                         pcr_delta = self._timeline - t_pcr_before
+                        rem_in_chunk = chunk_len - pos
+                        tot_buf = prefetch_bytes + rem_in_chunk
+                        has_queued_seg = not seg_url_queue.empty()
 
                         if eff_bps > 0:
-                            slice_dur = step / eff_bps
+                            byte_dur = step / eff_bps
+                            if 0.002 <= pcr_delta <= 0.25:
+                                slice_dur = 0.70 * byte_dur + 0.30 * pcr_delta
+                            else:
+                                slice_dur = byte_dur
                         elif 0.0 < pcr_delta <= 0.80:
                             slice_dur = pcr_delta
                         else:
                             slice_dur = (step / (512 * 1024)) * max(0.8, seg_dur / 4.0)
 
-                        if prefetch_bytes > 8 * 1024 * 1024:
-                            pace_factor = 0.96
-                        elif prefetch_bytes >= 2 * 1024 * 1024:
-                            pace_factor = 1.0
-                        elif prefetch_bytes >= 768 * 1024 or not seg_url_queue.empty():
-                            pace_factor = 1.015
+                        if has_queued_seg and tot_buf >= max_prefetch_bytes:
+                            pace_factor = 0.985
+                        elif tot_buf >= 2 * 1024 * 1024 or (has_queued_seg and tot_buf >= 768 * 1024):
+                            pace_factor = 1.000
+                        elif tot_buf >= 768 * 1024 or has_queued_seg:
+                            pace_factor = 1.012
                         else:
-                            pace_factor = 1.035
+                            pace_factor = 1.025
 
                         seg_clock += slice_dur * pace_factor
                         wait = seg_clock - time.monotonic()
@@ -3007,6 +3125,10 @@ class _AsyncHttpResponse:
         self._body = body
         self._reusable = False
         self._closed = False
+
+    @property
+    def content(self) -> bytes:
+        return self._body if self._body is not None else b""
 
     @property
     def text(self) -> str:
@@ -3438,7 +3560,7 @@ class _AsyncHttpClient:
                 tr._read_ready_cb = tr._read_ready__get_buffer
         return key, reader, writer, False
 
-    async def _send_and_read_headers(self, method: str, url: str):
+    async def _send_and_read_headers(self, method: str, url: str, extra_headers: dict = None):
         current_url = url
         for _ in range(8):
             parts = urlsplit(current_url)
@@ -3458,15 +3580,20 @@ class _AsyncHttpClient:
                 import base64 as _b64
                 raw_cred = f"{parts.username}:{parts.password or ''}".encode("utf-8")
                 req_lines.append(f"Authorization: Basic {_b64.b64encode(raw_cred).decode('ascii')}")
+            extra_keys = {k.lower() for k in extra_headers} if extra_headers else set()
             for k, v in self.headers.items():
                 kl = k.lower()
-                if kl == "host":
+                if kl == "host" or kl in extra_keys:
                     continue
                 if is_php and kl == "connection":
                     req_lines.append("Connection: close")
                 else:
                     req_lines.append(f"{k}: {v}")
-            if is_php and not any(k.lower() == "connection" for k in self.headers):
+            if extra_headers:
+                for ek, ev in extra_headers.items():
+                    if ek.lower() != "host":
+                        req_lines.append(f"{ek}: {ev}")
+            if is_php and not any(k.lower() == "connection" for k in self.headers) and "connection" not in extra_keys:
                 req_lines.append("Connection: close")
             req_bytes = ("\r\n".join(req_lines) + "\r\n\r\n").encode("latin-1", errors="ignore")
 
@@ -3505,8 +3632,8 @@ class _AsyncHttpClient:
             return _AsyncHttpResponse(self, key, reader, writer, status_code, hdrs, current_url)
         raise RuntimeError(f"Too many HTTP redirects for {url}")
 
-    async def get(self, url: str) -> _AsyncHttpResponse:
-        resp = await self._send_and_read_headers("GET", url)
+    async def get(self, url: str, extra_headers: dict = None) -> _AsyncHttpResponse:
+        resp = await self._send_and_read_headers("GET", url, extra_headers=extra_headers)
         chunks = []
         try:
             async for chunk in resp.aiter_bytes(65424):
@@ -3524,7 +3651,7 @@ class _AsyncHttpClient:
         resp._body = body
         return resp
 
-    def stream(self, method: str, url: str):
+    def stream(self, method: str, url: str, extra_headers: dict = None):
         client = self
 
         class _StreamCtx:
@@ -3532,7 +3659,7 @@ class _AsyncHttpClient:
                 self.resp = None
 
             async def __aenter__(self):
-                self.resp = await client._send_and_read_headers(method, url)
+                self.resp = await client._send_and_read_headers(method, url, extra_headers=extra_headers)
                 return self.resp
 
             async def __aexit__(self, *_):
@@ -3543,8 +3670,8 @@ class _AsyncHttpClient:
 
     async def aclose(self):
         for bucket in self._pool.values():
-            for _, writer in bucket:
-                self._close_writer(writer)
+            for item in bucket:
+                self._close_writer(item[1])
         self._pool.clear()
 
     async def __aenter__(self):
