@@ -1603,9 +1603,18 @@ class Engine:
                     self._pcr_index = index
                     return
                 self._break_timeline()
+            elif self._clock is time.monotonic and delta > int(PCR_HZ * 1.8):
+                pkt_diff = max(1, index - (self._pcr_index if self._pcr_index is not None else index))
+                est_br = self._pcr_bitrate if (self._pcr_bitrate and 500000.0 <= self._pcr_bitrate <= 80000000.0) else 12000000.0
+                est_dt = min(0.50, (pkt_diff * 188.0 * 8.0) / est_br)
+                self._timeline += est_dt
             elif delta:
                 self._timeline += delta / PCR_HZ
-                self._pcr_bitrate = ((index - self._pcr_index) * 188 * 8 * PCR_HZ / delta)
+                pkt_diff = index - (self._pcr_index if self._pcr_index is not None else index)
+                if pkt_diff > 0:
+                    inst_br = (pkt_diff * 188 * 8 * PCR_HZ) / delta
+                    if self._clock is not time.monotonic or 200000.0 <= inst_br <= 120000000.0:
+                        self._pcr_bitrate = inst_br
         self._pcr_last = pcr
         self._pcr_index = index
         if self._current and self._current_pcr is None:
@@ -2020,7 +2029,7 @@ class Engine:
             # Leave room for actual stream data even with unusually many tables.
             if len(prefix) + 188 <= self.max_segment_bytes:
                 raw_prefix = self._append_hls_raw(prefix)
-                if self._subscribers or self._output_states:
+                if (self._is_hls_input or not self._tables) and (self._subscribers or self._output_states):
                     if self._chunk_subscribers and raw_prefix:
                         for queue in self._chunk_subscribers:
                             self._enqueue(queue, raw_prefix, "queue_drops")
@@ -2046,25 +2055,27 @@ class Engine:
     def get_mpegts_prebuffer_parts(self) -> list:
         """Return keyframe-aligned, CC-continuous MPEG-TS prebuffer chunks ending at the exact current packet."""
         cur = bytes(self._current) if self._current else b""
-        if cur and self._current_starts_with_keyframe and len(cur) >= 3500 * 1024:
+        if cur and self._current_starts_with_keyframe and len(cur) >= 2048 * 1024:
             return [cur]
         if self._segments:
             segs_list = list(self._segments.values())
             last_seg = segs_list[-1]
             seg_data = last_seg.data if isinstance(last_seg.data, bytes) else bytes(last_seg.data)
             if seg_data:
-                if len(seg_data) + len(cur) < 3500 * 1024 and len(segs_list) >= 2 and not last_seg.discontinuity:
+                if len(seg_data) + len(cur) < 2560 * 1024 and len(segs_list) >= 2 and not last_seg.discontinuity:
                     prev_seg = segs_list[-2]
                     prev_data = prev_seg.data if isinstance(prev_seg.data, bytes) else bytes(prev_seg.data)
-                    if prev_data and len(prev_data) + len(seg_data) + len(cur) <= 10 * 1024 * 1024:
+                    if prev_data and len(prev_data) + len(seg_data) + len(cur) <= 5500 * 1024:
                         return [prev_data, seg_data, cur] if cur else [prev_data, seg_data]
-                if len(seg_data) + len(cur) <= 10 * 1024 * 1024:
+                if len(seg_data) + len(cur) <= 5500 * 1024:
                     return [seg_data, cur] if cur else [seg_data]
                 if cur and self._current_starts_with_keyframe and len(cur) >= 512 * 1024:
                     return [cur]
-                if cur:
+                if cur and len(seg_data) > 8 * 1024 * 1024:
                     return [cur]
-                return [seg_data]
+                if len(seg_data) <= 8 * 1024 * 1024:
+                    return [seg_data, cur] if cur else [seg_data]
+                return [cur] if cur else [seg_data[:4096 * 1024]]
         if cur:
             return [cur]
         return []
@@ -2074,11 +2085,17 @@ class Engine:
         parts = self.get_mpegts_prebuffer_parts()
         return b"".join(parts) if parts else b""
 
+    gop_preroll_burst = get_mpegts_prebuffer
+
     def _finish_segment(self):
         if not self._current:
             return
         duration = max(0.001, self._elapsed_segment())
         seg_bytes = bytes(self._current)
+        if self._clock is time.monotonic and self._pcr_bitrate and 500000.0 <= self._pcr_bitrate <= 100000000.0:
+            byte_dur = (len(seg_bytes) * 8.0) / self._pcr_bitrate
+            if byte_dur >= 0.8 and duration > max(self.segment_duration * 1.8, byte_dur * 1.35):
+                duration = round(byte_dur * 10.0) / 10.0
         self._current.clear()
         segment = Segment(self._sequence, seg_bytes, duration,
                           self._current_discontinuity)
@@ -2086,8 +2103,8 @@ class Engine:
         self._sequence += 1
         self._segment_bytes += len(seg_bytes)
         if self._clock is time.monotonic:
-            max_rounded = max((int(round(s.duration)) for s in self._segments.values()), default=1)
-            self._playlist_target = max(1, math.ceil(self.segment_duration), max_rounded)
+            max_ceil = max((int(math.ceil(s.duration - 0.02)) for s in self._segments.values()), default=1)
+            self._playlist_target = max(1, math.ceil(self.segment_duration), max_ceil)
         else:
             self._playlist_target = max(self._playlist_target, math.ceil(duration))
         self._current_started = None
@@ -2096,14 +2113,31 @@ class Engine:
         self._current_starts_with_keyframe = False
         self._current_has_audio = False
         self._current_discontinuity = False
-        hls_hot = self.is_hls_active()
-        if hls_hot:
-            eff_max_segs = 3 if duration >= 4.0 else min(self.max_segments, 4)
-            eff_max_bytes = min(self.max_hls_bytes, 16 * 1024 * 1024)
-            min_keep_segs = 3
+        if self._clock is not time.monotonic:
+            eff_max_segs = self.max_segments
+            eff_max_bytes = self.max_hls_bytes
+            min_keep_segs = 1
+        elif self.is_hls_active():
+            if duration >= 6.0:
+                eff_max_segs = min(self.max_segments, 4)
+                eff_max_bytes = min(self.max_hls_bytes, 64 * 1024 * 1024)
+                min_keep_segs = min(self.max_segments, 4)
+            else:
+                eff_max_segs = min(self.max_segments, 6)
+                eff_max_bytes = min(self.max_hls_bytes, 30 * 1024 * 1024)
+                min_keep_segs = min(self.max_segments, 5)
+        elif self._subscribers:
+            if duration >= 6.0:
+                eff_max_segs = min(self.max_segments, 2)
+                eff_max_bytes = min(self.max_hls_bytes, 24 * 1024 * 1024)
+                min_keep_segs = min(self.max_segments, 1)
+            else:
+                eff_max_segs = min(self.max_segments, 2)
+                eff_max_bytes = min(self.max_hls_bytes, 10 * 1024 * 1024)
+                min_keep_segs = min(self.max_segments, 2)
         else:
-            eff_max_segs = 2
-            eff_max_bytes = 9 * 1024 * 1024
+            eff_max_segs = min(self.max_segments, 2)
+            eff_max_bytes = min(self.max_hls_bytes, 6 * 1024 * 1024)
             min_keep_segs = 1
         evicted_large = False
         while (len(self._segments) > eff_max_segs or
@@ -2129,6 +2163,8 @@ class Engine:
             return True
         return False
 
+    _is_hls_active = is_hls_active
+
     async def wait_for_hls(self, timeout: float = 4.0) -> bool:
         """Wait for complete keyframe-aligned HLS segments to be ready."""
         self._hls_last_access = self._clock()
@@ -2149,9 +2185,11 @@ class Engine:
         all_segs = list(self._segments.values())
         if not all_segs and self._clock is time.monotonic and len(self._current) >= 188 * 256:
             all_segs.append(Segment(self._sequence, bytes(self._current), max(1.0, self._elapsed_segment()), self._current_discontinuity))
-        if len(all_segs) > 4 and self.max_segments >= 5:
-            skipped = all_segs[:-4]
-            visible = all_segs[-4:]
+        avg_d = (sum(s.duration for s in all_segs) / len(all_segs)) if all_segs else self.segment_duration
+        vis_max = 3 if (self._clock is time.monotonic and avg_d >= 6.0) else 4
+        if len(all_segs) > vis_max and (self.max_segments >= 5 or (self._clock is time.monotonic and vis_max == 3)):
+            skipped = all_segs[:-vis_max]
+            visible = all_segs[-vis_max:]
             disc_seq = self._evicted_discontinuities + sum(1 for s in skipped if s.discontinuity)
         else:
             visible = all_segs
@@ -2693,18 +2731,23 @@ class Engine:
                             seg_parts = urlsplit(seg_url)
                             seg_host = seg_parts.netloc
                             use_range = (
-                                seg_attempt == 0
-                                and seg_host not in range_disabled_hosts
+                                seg_host not in range_disabled_hosts
                                 and ".php" not in seg_parts.path.lower()
+                                and (seg_host in slow_edge_hosts or ".php" in master_url.lower())
                             )
-                            req_hdrs = {"Range": f"bytes=0-{range_step - 1}"} if use_range else None
                             total_seg_bytes = 0
                             is_partial_206 = False
-                            first_chunk = True
+                            if seg_read > 0:
+                                req_hdrs = {"Range": f"bytes={seg_read}-"}
+                            elif use_range and seg_attempt == 0:
+                                req_hdrs = {"Range": f"bytes=0-{range_step - 1}"}
+                            else:
+                                req_hdrs = None
+                            first_chunk = (seg_read == 0)
                             seg_bps = (self._pcr_bitrate / 8.0) if (self._pcr_bitrate and self._pcr_bitrate > 0) else 1500000.0
                             t_slice0 = time.monotonic()
                             async with seg_client.stream("GET", seg_url, extra_headers=req_hdrs) as seg_resp:
-                                if req_hdrs is not None and seg_resp.status_code != 206:
+                                if req_hdrs is not None and seg_read == 0 and seg_resp.status_code != 206:
                                     range_disabled_hosts.add(seg_host)
                                     if seg_resp.status_code >= 400:
                                         raise ValueError("Range rejected, retry full GET")
@@ -2715,9 +2758,11 @@ class Engine:
                                         tot_s = cr_hdr.rsplit("/", 1)[1].strip()
                                         if tot_s.isdigit():
                                             total_seg_bytes = int(tot_s)
-                                            is_partial_206 = True
+                                            if use_range and seg_read == 0:
+                                                is_partial_206 = True
                                 if not total_seg_bytes:
-                                    total_seg_bytes = int(seg_resp.headers.get("content-length") or 0)
+                                    cl_val = int(seg_resp.headers.get("content-length") or 0)
+                                    total_seg_bytes = (seg_read + cl_val) if (seg_read > 0 and seg_resp.status_code == 206 and cl_val > 0) else cl_val
                                 if total_seg_bytes >= 188 and seg_dur > 0:
                                     seg_bps = total_seg_bytes / seg_dur
                                 async for chunk in seg_resp.aiter_bytes(read_chunk_sz):
@@ -2739,6 +2784,14 @@ class Engine:
                                         return
                                     prefetch_bytes += len(chunk)
                                     await prefetch_queue.put((chunk, seg_dur, seg_bps, is_seg_start))
+                                    if (not is_partial_206 and seg_host not in range_disabled_hosts
+                                            and seg_read >= range_step and total_seg_bytes > seg_read + 524288
+                                            and (seg_read % 188) == 0):
+                                        el_get = time.monotonic() - t_slice0
+                                        if el_get > 2.8 and (seg_read / el_get) < 1100000:
+                                            slow_edge_hosts.add(seg_host)
+                                            is_partial_206 = True
+                                            break
                             if is_partial_206 and (time.monotonic() - t_slice0) > 1.75:
                                 slow_edge_hosts.add(seg_host)
                             if is_partial_206 and seg_read >= 188 and seg_read < total_seg_bytes and total_seg_bytes <= max_single_seg_bytes:
@@ -2797,7 +2850,11 @@ class Engine:
                         raise
                       except Exception as exc:
                         is_404 = isinstance(exc, HTTPStatusError) and ("404" in str(exc) or "410" in str(exc))
-                        if not is_404 and seg_attempt == 0 and seg_read == 0 and self._running:
+                        if not is_404 and seg_attempt == 0 and (seg_read == 0 or (total_seg_bytes > 0 and seg_read < total_seg_bytes)) and self._running:
+                            if seg_read > 0:
+                                alt_u = seg_mirror_urls.get(seg_ck)
+                                if alt_u and alt_u != seg_url:
+                                    seg_url = alt_u
                             await asyncio.sleep(0.08)
                             continue
                         consecutive_errors += 1
@@ -5180,10 +5237,10 @@ async def handle_http_mpegts(req: web.Request) -> web.StreamResponse:
     if w.cfg.get("engine") == "astrag" and w.astrag_engine is not None:
         eng = w.astrag_engine
         if hasattr(eng, "subscribe_with_prebuffer"):
-            prebuffer_parts, queue = eng.subscribe_with_prebuffer(96, chunk_mode=True)
+            prebuffer_parts, queue = eng.subscribe_with_prebuffer(512, chunk_mode=True)
         else:
             prebuffer_parts = eng.get_mpegts_prebuffer_parts()
-            queue = eng.subscribe(96, chunk_mode=True)
+            queue = eng.subscribe(512, chunk_mode=True)
         try:
             burst_sent = False
             aligned = False
