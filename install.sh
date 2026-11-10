@@ -74,7 +74,7 @@ mkdir -p /dev/shm/flustream
 echo "[3/5] Настройка изолированного окружения Python..."
 python3 -m venv /opt/flustream/venv
 /opt/flustream/venv/bin/pip install --upgrade pip
-/opt/flustream/venv/bin/pip install aiohttp psutil uvloop
+/opt/flustream/venv/bin/pip install aiohttp psutil
 
 echo "[4/5] Запись движка AstraG (/opt/flustream/stream_engine.py) и ядра StreamFlow Aria (/opt/flustream/server.py)..."
 python3 - << 'COREEOF'
@@ -4242,7 +4242,9 @@ chmod +x /opt/flustream/stream_engine.py
 cat << 'PYEOF' > /opt/flustream/server.py
 #!/usr/bin/env python3
 import asyncio
+import atexit
 import base64
+import ctypes
 import fnmatch
 import hashlib
 import hmac
@@ -4297,12 +4299,18 @@ class CoreSupervisor:
     async def connect(self):
         last_exc = None
         for _ in range(100):
+            sock = None
             try:
-                reader, writer = await asyncio.open_unix_connection("\0" + self.ctl_name)
+                sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+                sock.connect("\0" + self.ctl_name)
+                sock.setblocking(False)
+                reader, writer = await asyncio.open_unix_connection(sock=sock)
+                sock = None
                 writer.write(f"AUTH\t{self.secret}\n".encode())
                 await writer.drain()
                 line = await asyncio.wait_for(reader.readline(), 5)
                 if line.strip() != b"OK":
+                    writer.close()
                     raise RuntimeError("astrag-core rejected control connection")
                 self.writer = writer
                 for item in self.pending:
@@ -4310,7 +4318,12 @@ class CoreSupervisor:
                 self.pending.clear()
                 self.tasks = [asyncio.create_task(self._reader(reader)), asyncio.create_task(self._watchdog())]
                 return
-            except (OSError, RuntimeError, asyncio.TimeoutError) as exc:
+            except Exception as exc:
+                if sock is not None:
+                    try:
+                        sock.close()
+                    except Exception:
+                        pass
                 last_exc = exc
                 await asyncio.sleep(0.1)
         raise RuntimeError(f"cannot connect to astrag-core: {last_exc}")
@@ -4465,13 +4478,22 @@ def _start_core(host: str, port: int):
         internal = s.getsockname()[1]
     secret = secrets.token_hex(16)
     ctl = f"astrag-core-{os.getpid()}-{secrets.token_hex(4)}"
+
+    def _set_pdeathsig():
+        try:
+            ctypes.CDLL("libc.so.6").prctl(1, signal.SIGTERM)
+        except Exception:
+            pass
+
     try:
         proc = subprocess.Popen(
             [str(core_bin), "--ctl", ctl, "--secret", secret, "--upstream", str(internal), "--listen", f"{host}:{port}"],
-            stdin=subprocess.DEVNULL
+            stdin=subprocess.DEVNULL,
+            preexec_fn=_set_pdeathsig,
         )
     except OSError:
         return None, None
+    atexit.register(lambda: proc.terminate() if proc.poll() is None else None)
     time.sleep(0.4)
     if proc.poll() is not None:
         return None, None
@@ -10033,15 +10055,15 @@ def create_app() -> web.Application:
 
 
 if __name__ == "__main__":
-    try:
-        import uvloop, asyncio
-        asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
-    except ImportError:
-        pass
     port = 8080
     if STATE_JSON.exists():
         try:
             port = int(json.loads(STATE_JSON.read_text(encoding="utf-8")).get("http_port", 8080))
+        except Exception:
+            pass
+    if CONFIG_FILE.exists() and (not STATE_JSON.exists() or CONFIG_FILE.stat().st_mtime >= STATE_JSON.stat().st_mtime):
+        try:
+            port = int(parse_flustream_conf(CONFIG_FILE.read_text(encoding="utf-8"), {"http_port": port}).get("http_port", port))
         except Exception:
             pass
     CORE, internal_port = _start_core("0.0.0.0", port)
@@ -10104,6 +10126,7 @@ Environment="PYTHONDONTWRITEBYTECODE=1"
 Environment="MALLOC_MMAP_THRESHOLD_=131072"
 Environment="MALLOC_TRIM_THRESHOLD_=131072"
 Environment="MALLOC_ARENA_MAX=2"
+ExecStartPre=-/usr/bin/pkill -9 -f /opt/flustream/astrag-core
 ExecStart=/opt/flustream/venv/bin/python /opt/flustream/server.py
 KillMode=control-group
 Restart=always
