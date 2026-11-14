@@ -5208,41 +5208,33 @@ def _normalize_channel_match_key(raw: str) -> str:
 
 
 def _rewrite_remote_url_host(raw_url: str, rhost: str) -> str:
-    """Rewrite loopback/wildcard hostnames in remote stream URLs to the remote node IP."""
+    """Rewrite loopback/wildcard hostnames in remote HTTP/HTTPS stream URLs to the remote node IP.
+    Non-HTTP schemes (e.g. dvb://, udp://, rtp://, srt://, file://) are local to the remote server and return empty string."""
     u = str(raw_url or "").strip()
     if not u or not rhost:
         return ""
     base, *frag = u.split("#", 1)
     suffix = f"#{frag[0]}" if frag else ""
-    low = base.lower()
-    if low.startswith(("http://", "https://")):
-        try:
-            sp = urlsplit(base)
-            host = (sp.hostname or "").strip().lower()
-            if host in ("", "0.0.0.0", "127.0.0.1", "localhost", "::1"):
-                port_part = f":{sp.port}" if sp.port else ""
-                auth_part = ""
-                if sp.username is not None:
-                    auth_part = sp.username
-                    if sp.password is not None:
-                        auth_part += f":{sp.password}"
-                    auth_part += "@"
-                path = sp.path or "/"
-                q = f"?{sp.query}" if sp.query else ""
-                return f"{sp.scheme}://{auth_part}{rhost}{port_part}{path}{q}{suffix}"
-            return u
-        except Exception:
-            return u
-    if low.startswith(("udp://", "rtp://", "rtsp://", "srt://")):
-        scheme, rest = base.split("://", 1)
-        rest_clean = rest.lstrip("@")
-        if rest_clean.startswith(("0.0.0.0:", "127.0.0.1:", "localhost:")):
-            port_and_tail = rest_clean.split(":", 1)[1]
-            return f"{scheme}://{rhost}:{port_and_tail}{suffix}"
-        if rest_clean.startswith(":"):
-            return f"{scheme}://{rhost}{rest_clean}{suffix}"
-        return u
-    return u
+    try:
+        sp = urlsplit(base.strip())
+    except Exception:
+        return ""
+    scheme = (sp.scheme or "").lower()
+    if scheme not in ("http", "https", "hls", "hlss", "tshttp", "tshttps"):
+        return ""
+    host = (sp.hostname or "").strip().lower()
+    if host in ("", "0", "0.0.0.0", "127.0.0.1", "localhost", "::1"):
+        port_part = f":{sp.port}" if sp.port else ""
+        auth_part = ""
+        if sp.username is not None:
+            auth_part = sp.username
+            if sp.password is not None:
+                auth_part += f":{sp.password}"
+            auth_part += "@"
+        path = sp.path or "/"
+        q = f"?{sp.query}" if sp.query else ""
+        return f"{scheme}://{auth_part}{rhost}{port_part}{path}{q}{suffix}"
+    return base.strip() + suffix
 
 
 def _build_cluster_stream_inputs(
@@ -5255,63 +5247,81 @@ def _build_cluster_stream_inputs(
     play_auth: str = "",
     ruser: str = "",
     srv_type: str = "auto",
+    remote_cfg: Optional[dict] = None,
 ) -> List[str]:
-    """Build ordered failover inputs for a remote cluster stream:
-    1) Direct stream from the remote node (/play/<id> with ?token=... or ?auth=user:pass)
-    2) External output links of the remote channel (with 127.0.0.1/0.0.0.0 rewritten to rhost)
-    3) Original input links of the remote channel as deep fallback
+    """Build ordered failover inputs for a remote cluster stream (matching astron/astrag_backend.py & Astra Cesbo):
+    1) Direct stream from the remote node (/play/<id> with ?token=... resolved from remote_cfg['users'] or stream token)
+    2) External HTTP/HTTPS output links of the remote channel (with 0/127.0.0.1/0.0.0.0 rewritten to rhost)
+    3) Original HTTP/HTTPS input links of the remote channel as deep fallback (local dvb://, udp://, srt:// are ignored)
     """
     orig_id = str(rs.get("id") or rs.get("name") or "").strip()
-    p_port = int(play_port if play_port is not None else rport)
-    user = rlogin or ruser
-    candidates: List[str] = []
+    rhost = str(rhost or "").strip()
+    user = (rlogin or ruser or "").strip()
+    rcfg = remote_cfg if isinstance(remote_cfg, dict) else {}
+    rsettings = rcfg.get("settings") if isinstance(rcfg.get("settings"), dict) else {}
+    rauth = rcfg.get("auth") if isinstance(rcfg.get("auth"), dict) else {}
+    rusers = rcfg.get("users") if isinstance(rcfg.get("users"), dict) else {}
 
-    def _add_candidate(url_val: str):
-        u = str(url_val or "").strip()
-        if u and u not in candidates:
-            candidates.append(u)
+    play_token = ""
+    if rauth.get("enable") or rsettings.get("http_play_users") or rusers:
+        if user and isinstance(rusers.get(user), dict) and rusers[user].get("token"):
+            play_token = str(rusers[user]["token"]).strip()
+        else:
+            for uinfo in rusers.values():
+                if isinstance(uinfo, dict) and uinfo.get("enable", True) not in (False, 0, "0", "false") and uinfo.get("token"):
+                    play_token = str(uinfo["token"]).strip()
+                    break
+    if not play_token:
+        play_token = str(rs.get("http_play_token") or rs.get("token") or "").strip()
 
-    if rs.get("direct_url"):
-        _add_candidate(_rewrite_remote_url_host(str(rs["direct_url"]), rhost))
+    p_port = int(rsettings.get("http_play_port") or play_port or rcfg.get("http_port") or rport or 8000)
 
-    tok = str(rs.get("http_play_token") or rs.get("token") or "").strip()
     q_suffix = play_auth
     if not q_suffix:
-        if tok:
-            q_suffix = f"?token={tok}"
+        if play_token:
+            q_suffix = f"?token={play_token}"
         elif bool(rs.get("http_play_users")) and user:
             q_suffix = f"?auth={user}:{rpass}" if rpass else f"?auth={user}"
 
+    play_url = ""
     if orig_id and rhost and p_port:
-        primary_play = f"http://{rhost}:{p_port}/play/{orig_id}{q_suffix}"
-        if srv_type in ("streamflow", "flussonic"):
-            _add_candidate(primary_play)
-            _add_candidate(f"http://{rhost}:{p_port}/{orig_id}/mpegts{q_suffix}")
-            _add_candidate(f"http://{rhost}:{p_port}/{orig_id}/index.m3u8{q_suffix}")
+        if str(srv_type or "").lower() == "flussonic":
+            play_url = f"http://{rhost}:{p_port}/{orig_id}/mpegts{q_suffix}"
         else:
-            _add_candidate(primary_play)
-            if user and rpass and not q_suffix:
-                _add_candidate(f"http://{user}:{rpass}@{rhost}:{p_port}/play/{orig_id}")
-            _add_candidate(f"http://{rhost}:{p_port}/{orig_id}/mpegts{q_suffix}")
-            _add_candidate(f"http://{rhost}:{p_port}/{orig_id}/index.m3u8{q_suffix}")
+            play_url = f"http://{rhost}:{p_port}/play/{orig_id}{q_suffix}"
 
+    out_urls: List[str] = []
+    if rs.get("direct_url"):
+        rw_d = _rewrite_remote_url_host(str(rs["direct_url"]), rhost)
+        if rw_d and rw_d not in out_urls:
+            out_urls.append(rw_d)
     raw_outputs = rs.get("output") or []
     if isinstance(raw_outputs, str):
         raw_outputs = [raw_outputs]
     if isinstance(raw_outputs, list):
         for out_u in raw_outputs:
-            rw = _rewrite_remote_url_host(out_u, rhost)
-            if rw:
-                _add_candidate(rw)
+            if isinstance(out_u, str):
+                rw = _rewrite_remote_url_host(out_u, rhost)
+                if rw and rw not in out_urls:
+                    out_urls.append(rw)
 
+    in_urls: List[str] = []
     raw_inputs = rs.get("input") or rs.get("inputs") or []
     if isinstance(raw_inputs, str):
         raw_inputs = [raw_inputs]
     if isinstance(raw_inputs, list):
         for in_u in raw_inputs:
-            rw = _rewrite_remote_url_host(in_u, rhost)
-            if rw:
-                _add_candidate(rw)
+            if isinstance(in_u, str):
+                rw = _rewrite_remote_url_host(in_u, rhost)
+                if rw and rw not in in_urls:
+                    in_urls.append(rw)
+
+    candidates: List[str] = []
+    http_play_enabled = bool(rsettings.get("http_play_stream") or rsettings.get("http_play_hls") or not rsettings)
+    ordered = [play_url, *out_urls, *in_urls] if http_play_enabled else [*out_urls, play_url, *in_urls]
+    for u in ordered:
+        if u and u not in candidates:
+            candidates.append(u)
 
     return candidates
 
@@ -6571,13 +6581,58 @@ class StreamManager:
 
     def _apply_cluster_cache_to_streams(self):
         servers = self.config_data.get("servers", [])
+        cluster_hosts = set()
+        remote_ids_all = set()
+        for srv in servers:
+            if isinstance(srv, dict) and srv.get("host"):
+                rh = str(srv.get("host") or "").strip().lower()
+                rp = int(srv.get("port") or 8000)
+                cluster_hosts.add(rh)
+                rcfg = self.cluster_cache.get(f"{rh}:{rp}") or self.cluster_cache.get(f"{srv.get('host')}:{rp}")
+                if isinstance(rcfg, dict):
+                    for rs in rcfg.get("make_stream", []) or []:
+                        if isinstance(rs, dict):
+                            rid = str(rs.get("id") or rs.get("name") or "").strip()
+                            if rid:
+                                remote_ids_all.add(rid)
+                                remote_ids_all.add(re.sub(r"[^a-zA-Z0-9_\-]", "_", rid))
+
+        def _is_stale_cluster_or_dvb_input(u: str) -> bool:
+            u_str = str(u or "").strip()
+            if not u_str:
+                return True
+            if u_str.lower().startswith("dvb://"):
+                return True
+            try:
+                sp = urlsplit(u_str.split("#", 1)[0])
+                h = (sp.hostname or "").strip().lower()
+                if h and h in cluster_hosts:
+                    return True
+            except Exception:
+                pass
+            return False
+
         local_streams = []
         for s in self.config_data.get("streams", []):
             if s.get("_cluster_host"):
                 continue
             auto_in = set(s.get("_cluster_auto_inputs") or [])
-            if auto_in:
-                s["inputs"] = [u for u in s.get("inputs", []) if u not in auto_in]
+            orig_inputs = [u for u in s.get("inputs", []) if u not in auto_in and not str(u).strip().lower().startswith("dvb://")]
+            if orig_inputs and all(_is_stale_cluster_or_dvb_input(u) for u in orig_inputs) and str(s.get("name", "")) in remote_ids_all:
+                # Stream was previously a cluster stream saved with stale cluster/dvb inputs; let cluster sync recreate it cleanly
+                continue
+            cleaned_inputs = []
+            for u in orig_inputs:
+                try:
+                    sp = urlsplit(str(u).split("#", 1)[0])
+                    h = (sp.hostname or "").strip().lower()
+                    if h and h in cluster_hosts:
+                        # Remove old auto-injected cluster URLs (with user:pass@, /mpegts, /index.m3u8, or missing token) so fresh one is attached below
+                        continue
+                except Exception:
+                    pass
+                cleaned_inputs.append(u)
+            s["inputs"] = cleaned_inputs
             s["_cluster_auto_inputs"] = []
             s["_cluster_backups"] = []
             local_streams.append(s)
@@ -6607,11 +6662,13 @@ class StreamManager:
             rpass = str(srv.get("password") or "")
             srv_name = str(srv.get("name") or rhost).strip()
             srv_mode = str(srv.get("import_mode") or "ondemand").strip()
+            srv_type = str(srv.get("type") or "auto").strip().lower()
             host_port = f"{rhost}:{rport}"
             rcfg = self.cluster_cache.get(host_port)
             if not isinstance(rcfg, dict):
                 continue
-            r_http_port = int(rcfg.get("http_port") or srv.get("play_port") or rport)
+            rsettings = rcfg.get("settings") if isinstance(rcfg.get("settings"), dict) else {}
+            r_http_port = int(rsettings.get("http_play_port") or rcfg.get("http_port") or srv.get("play_port") or rport)
             for raw_s in rcfg.get("make_stream", []) or []:
                 if not isinstance(raw_s, dict) or not raw_s.get("enable", True):
                     continue
@@ -6620,7 +6677,16 @@ class StreamManager:
                 if not orig_id_clean:
                     continue
                 rtitle = str(raw_s.get("name") or raw_s.get("title") or orig_id).strip()
-                c_inputs = _build_cluster_stream_inputs(raw_s, rhost, rport, play_port=r_http_port, rlogin=rlogin, rpass=rpass)
+                c_inputs = _build_cluster_stream_inputs(
+                    raw_s,
+                    rhost,
+                    rport,
+                    play_port=r_http_port,
+                    rlogin=rlogin,
+                    rpass=rpass,
+                    srv_type=srv_type,
+                    remote_cfg=rcfg,
+                )
                 if not c_inputs:
                     continue
 
@@ -7545,10 +7611,17 @@ async def handle_control_api(req: web.Request) -> web.Response:
                 "enable": bool(s.get("enabled", True)),
                 "input": clean_inputs,
                 "output": s.get("pushes", []),
+                "token": str(s.get("token", "")),
                 "audio_track": str(s.get("audio_track", "0")),
             })
+        hport = MANAGER.config_data.get("http_port", 8080)
         return web.json_response({
-            "http_port": MANAGER.config_data.get("http_port", 8080),
+            "http_port": hport,
+            "settings": {
+                "http_play_stream": True,
+                "http_play_hls": True,
+                "http_play_port": hport,
+            },
             "make_stream": ms_list,
             "servers": MANAGER.config_data.get("servers", []),
         }, headers={"Access-Control-Allow-Origin": "*"})
@@ -8041,6 +8114,9 @@ async def api_save_stream(req: web.Request) -> web.Response:
                 body["engine"] = s.get("engine", "ffmpeg")
             if "audio_track" not in body:
                 body["audio_track"] = str(s.get("audio_track", "0"))
+            for k_meta in ("_cluster_host", "_cluster_srv_name", "_cluster_orig_id", "_cluster_type", "_cluster_auto_inputs", "_cluster_backups"):
+                if k_meta in s and k_meta not in body:
+                    body[k_meta] = s[k_meta]
             streams[idx] = body
             replaced = True
             break
